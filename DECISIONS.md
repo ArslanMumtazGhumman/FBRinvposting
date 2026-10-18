@@ -55,3 +55,31 @@ Choices made where the brief left room. Simpler option first; revisit if it hurt
   without a database. CI's ubuntu runners have Docker.
 - **docker-compose isn't updated until step 6**, so between steps 2 and 6 `docker compose up` needs an
   external Postgres in `DATABASE_URL`.
+
+### Step 3: REST endpoints
+- **"Drafts only" means `draft`, `validated` and `failed`.** None of these reached FBR (a `failed` invoice
+  was rejected, so FBR didn't record it), and the web app already edits and deletes them. `queued`,
+  `posting`, `posted` and `outcome_unknown` are refused with 409 and a reason. The status check is in
+  the UPDATE/DELETE's WHERE clause, so it can't race the posting worker.
+- **Full replace, no field-level PATCH.** `PUT /invoices/:id` replaces the header and lines; the client always
+  has the whole invoice. `status` from the client is limited to `draft`/`validated`; FBR fields, attempts
+  and history are server-owned.
+- **Customers and products: `PUT /:id` creates or replaces,** because the web app generates ids
+  (`uid('c_')`); `POST /` exists for server-generated ids. An id that belongs to another business is a 409.
+- **Bulk create is part of step 3** (`POST /invoices/bulk`, ≤500, 20 MB body limit on that route only),
+  because step 5 needs it. Rows are validated one by one; valid rows are inserted in one transaction and
+  bad or duplicate ones come back by index.
+- **Invoice numbers.** If `localRef` is missing, the server reserves the next number(s) from
+  `businesses.next_invoice_no` in the same transaction (`PREFIX` + 5 digits, as the web app formats them).
+  Numbers reserved for rows that then turn out to be duplicates are skipped, not reused.
+- **Cursor pagination on (created_at, id), newest first.** The cursor carries `created_at` as Postgres
+  text so microseconds survive the round trip. Lines are loaded for the page in a single query.
+- **Search (`q`)** is a case-insensitive substring match on invoice number, IRN and buyer name/NTN, with
+  `%`/`_` escaped. No full-text index yet; add a trigram index when a business passes ~100k invoices.
+- **Debit notes:** the schema and the database require `invoiceRefNo`; the API doesn't check that the IRN
+  belongs to one of this business's posted invoices, because the original may have been posted outside Rasid.
+- **Validation is shape and bounds only** (types, lengths, enums, real dates, NTN/CNIC digits). Tax rules stay
+  in the web app's `tax.ts` and with FBR, because drafts may be incomplete.
+- **Existing routes are validated too:** login, token save, FBR validate/post/reg-type. FBR payloads are
+  checked against the exact v1.12 field set; unknown fields are dropped before the payload reaches FBR.
+- **`src/app.ts` builds the app; `src/server.ts` listens.** Tests mount the real app on an ephemeral port.

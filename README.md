@@ -50,6 +50,25 @@ npm run db:generate # after editing src/db/schema.ts: writes a new drizzle/ migr
 npm run build       # tsc -> dist/ (what the Docker image runs)
 ```
 
+## API
+
+All business routes are under `/api/businesses/:businessId`, need a session, and need the `X-CSRF-Token`
+header on writes. Every body is validated with zod (`rasid-api/src/schemas`); a 400 lists
+`issues: [{ path, message }]`. Viewers can read; owners and accountants can write.
+
+| Route | Notes |
+| --- | --- |
+| `GET /invoices` | `?status=draft,validated&environment&invoiceType&from&to&batchId&q&limit≤200&cursor` → `{ items, nextCursor }`, newest first |
+| `GET /invoices/:id` | Same shape as `Invoice` in `models.ts` |
+| `POST /invoices` | Allocates the next invoice number unless `localRef` is given; 409 on duplicates |
+| `POST /invoices/bulk` | Up to 500 invoices; returns `{ created: [{ index, invoice }], errors: [{ index, issues }] }` |
+| `PUT /invoices/:id` | Full replace; only `draft`, `validated`, `failed` (409 otherwise) |
+| `DELETE /invoices/:id` | Same states; posted invoices are corrected with a Debit Note referencing the IRN |
+| `GET/POST /customers`, `GET/PUT/DELETE /customers/:id` | `PUT` creates or replaces (the web app makes ids) |
+| `GET/POST /products`, `GET/PUT/DELETE /products/:id` | as customers |
+| `GET/POST /import-mappings`, `DELETE /import-mappings/:id` | `POST` replaces the mapping with the same header signature |
+| `PUT /credentials/:env`, `POST /credentials/:env/test` | Tokens are write-only |
+
 ## What is where
 
 | Feature | Code |
@@ -65,10 +84,12 @@ npm run build       # tsc -> dist/ (what the Docker image runs)
 | Login, scrypt, TOTP, lockout, cookie session, CSRF | `rasid-api/src/lib/auth.ts` |
 | PRAL client (sandbox `_sb` routing, timeouts, safe retry) | `rasid-api/src/lib/fbr-client.ts` |
 | Idempotent posting, reference cache, seller-NTN guard | `rasid-api/src/routes/fbr.ts` |
+| Request validation (zod) | `rasid-api/src/schemas/*.ts` |
 | Hash-chained audit log | `rasid-api/src/lib/audit.ts` |
 | Database schema | `rasid-api/src/db/schema.ts` |
 | Row-level security, append-only and posted-invoice guards | `rasid-api/drizzle/0001_rls.sql` |
 | Per-request business context (`withBusiness`) | `rasid-api/src/db/client.ts` |
+| Invoice persistence (shared with the posting worker) | `rasid-api/src/repos/invoices.ts` |
 
 ## Before going live
 

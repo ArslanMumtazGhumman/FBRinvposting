@@ -7,7 +7,9 @@ import { Router } from 'express';
 import { requireAuth, requireBusiness, requireRole } from '../lib/auth.js';
 import { audit } from '../lib/audit.js';
 import { fbr, FbrHttpError } from '../lib/fbr-client.js';
+import { parse } from '../lib/http.js';
 import { decrypt, encrypt, hint } from '../lib/vault.js';
+import { TokenBody } from '../schemas/auth.js';
 import { withBusiness, type Tx } from '../db/client.js';
 import { fbrCredentials } from '../db/schema.js';
 import type { FbrEnv } from '../types/models.js';
@@ -20,7 +22,8 @@ const isEnv = (env: string): env is FbrEnv => ENVS.has(env);
 
 credentialRoutes.put<Params>('/:env', requireAuth, requireBusiness, requireRole('owner'), async (req, res) => {
   const { env } = req.params;
-  const token = String(req.body?.token ?? '').trim().replace(/^Bearer\s+/i, '');
+  const body = parse(TokenBody, req.body, res); if (!body) return;
+  const token = body.token.trim().replace(/^Bearer\s+/i, '');
   if (!isEnv(env)) return res.status(400).json({ message: 'Unknown environment' });
   if (token.length < 16 || token.length > 4096 || /\s/.test(token)) return res.status(400).json({ message: 'That does not look like a valid token.' });
   const businessId = req.params.businessId;

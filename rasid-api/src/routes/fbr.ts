@@ -12,6 +12,8 @@ import { Router, type Request, type Response } from 'express';
 import { requireAuth, requireBusiness, requireRole } from '../lib/auth.js';
 import { audit, hashPayload } from '../lib/audit.js';
 import { fbr, FbrHttpError, type FbrJson } from '../lib/fbr-client.js';
+import { parse } from '../lib/http.js';
+import { FbrCallBody, RegTypeBody } from '../schemas/auth.js';
 import { withBusiness } from '../db/client.js';
 import { apiCalls, businesses } from '../db/schema.js';
 import type { FbrEnv } from '../types/models.js';
@@ -46,18 +48,11 @@ async function anyToken(req: Req): Promise<string | null> {
     (await loadToken(tx, businessId, 'production')) ?? (await loadToken(tx, businessId, 'sandbox')));
 }
 
-/** Light structural check so obviously bad payloads never reach FBR. */
-function checkPayload(p: FbrJson): string | null {
-  if (!p || typeof p !== 'object' || !Array.isArray(p.items) || !p.items.length || p.items.length > 500) return 'Invoice must have 1 to 500 items.';
-  if (!/^(\d{7}|\d{13})$/.test(p.sellerNTNCNIC ?? '')) return 'Seller NTN/CNIC must be 7 or 13 digits.';
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(p.invoiceDate ?? '')) return 'invoiceDate must be YYYY-MM-DD.';
-  return null;
-}
-
 fbrRoutes.post<Params>('/validate', requireAuth, requireBusiness, requireRole('owner', 'accountant'), async (req, res) => {
   const ctx = await context(req, res); if (!ctx) return;
-  const payload = req.body?.payload;
-  const bad = checkPayload(payload); if (bad) return res.status(400).json({ message: bad });
+  // Shape check (FbrInvoicePayload) so obviously bad payloads never reach FBR; unknown fields are dropped.
+  const body = parse(FbrCallBody, req.body, res); if (!body) return;
+  const { payload } = body;
   if (ctx.sellerNtn !== payload.sellerNTNCNIC) return res.status(403).json({ message: 'Seller NTN does not match this business.' });
   try {
     const r = await fbr.validate(ctx.token, ctx.env, payload);
@@ -71,8 +66,8 @@ fbrRoutes.post<Params>('/post', requireAuth, requireBusiness, requireRole('owner
   const actor = req.user.id;
   const key = String(req.get('Idempotency-Key') ?? '').slice(0, 120);
   if (!key) return res.status(400).json({ message: 'Idempotency-Key header is required.' });
-  const payload = req.body?.payload;
-  const bad = checkPayload(payload); if (bad) return res.status(400).json({ message: bad });
+  const body = parse(FbrCallBody, req.body, res); if (!body) return;
+  const { payload } = body;
   if (ctx.sellerNtn !== payload.sellerNTNCNIC) return res.status(403).json({ message: 'Seller NTN does not match this business.' });
 
   const [done] = await withBusiness(actor, businessId, tx => tx.select({ response: apiCalls.response }).from(apiCalls)
@@ -135,7 +130,8 @@ fbrRoutes.get<KindParams>('/reference/:kind', requireAuth, requireBusiness, asyn
 fbrRoutes.post<Params>('/reg-type', requireAuth, requireBusiness, async (req, res) => {
   const token = await anyToken(req);
   if (!token) return res.status(401).json({ message: 'Add an FBR token first.' });
-  const no = String(req.body?.Registration_No ?? '').replace(/\D/g, '');
+  const body = parse(RegTypeBody, req.body, res); if (!body) return;
+  const no = body.Registration_No.replace(/\D/g, '');
   if (!/^(\d{7}|\d{9}|\d{13})$/.test(no)) return res.status(400).json({ message: 'Enter a 7-digit NTN or 13-digit CNIC.' });
   try { res.json((await fbr.regType(token, no)).json); }
   catch (e) { res.status(503).json({ message: messageOf(e) }); }

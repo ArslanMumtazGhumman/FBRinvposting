@@ -9,6 +9,7 @@ import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { config } from '../config.js';
 import { db, withUser } from '../db/client.js';
+import { businessIdOf } from './http.js';
 import { memberships, users } from '../db/schema.js';
 import type { Role, User } from '../types/models.js';
 
@@ -117,10 +118,10 @@ export const requireRole = (...roles: Role[]) => (req: Request, res: Response, n
   roles.includes(req.membership?.role ?? req.user.role) ? next() : res.status(403).json({ code: 'FORBIDDEN', message: 'Your role cannot do this.' });
 
 /** Membership check: the user must belong to the business in :businessId. */
-export async function requireBusiness(req: Request<{ businessId: string }>, res: Response, next: NextFunction) {
+export async function requireBusiness(req: Request, res: Response, next: NextFunction) {
   const userId = req.user.id;
   const [m] = await withUser(userId, tx => tx.select().from(memberships)
-    .where(and(eq(memberships.userId, userId), eq(memberships.businessId, String(req.params.businessId)))));
+    .where(and(eq(memberships.userId, userId), eq(memberships.businessId, businessIdOf(req)))));
   if (!m) return res.status(404).json({ code: 'NOT_FOUND', message: 'Business not found.' });
   req.membership = m;
   next();
