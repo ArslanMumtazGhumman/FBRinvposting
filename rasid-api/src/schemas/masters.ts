@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { Id, money, NtnCnic, RegistrationType, text } from './common.js';
+import { FbrEnv, Id, money, NtnCnic, RegistrationType, SellerNtnCnic, text } from './common.js';
 
 export const CustomerInput = z.object({
   id: Id.optional(),
@@ -34,3 +34,19 @@ export const ImportMappingInput = z.object({
 export type CustomerInput = z.infer<typeof CustomerInput>;
 export type ProductInput = z.infer<typeof ProductInput>;
 export type ImportMappingInput = z.infer<typeof ImportMappingInput>;
+
+/** POST /api/businesses and PUT /api/businesses/:businessId (Business in rasid-web models.ts, minus token flags). */
+export const BusinessInput = z.object({
+  id: Id.optional(),
+  name: text(200).min(1, 'Name is required.'),
+  ntnCnic: SellerNtnCnic,
+  province: text(100).min(1),
+  address: text(500).default(''),
+  activity: text(100).min(1),
+  sector: text(100).min(1),
+  environment: FbrEnv,
+  defaultSaleType: text(200).min(1),
+  furtherTaxRate: z.number().finite().min(0).max(100),
+  invoicePrefix: z.string().max(20).regex(/^[A-Za-z0-9/_-]*$/, 'Use letters, digits, - / or _.'),
+  nextInvoiceNo: z.number().int().min(1).max(99_999_999),
+});

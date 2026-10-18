@@ -20,6 +20,7 @@ import { apiCalls, businesses, invoices, type FieldIssue, type InvoiceStatus } f
 import { audit, hashPayload } from '../lib/audit.js';
 import { fbr, FbrHttpError, type FbrJson, type FbrResult } from '../lib/fbr-client.js';
 import { issuesFromResponse, toPayload } from '../lib/fbr-payload.js';
+import { pgCode, PG } from '../lib/http.js';
 import { linesFor, toInvoiceDto } from '../repos/invoices.js';
 import { appendHistory } from '../repos/posting.js';
 import { loadToken } from '../routes/credentials.js';
@@ -120,9 +121,19 @@ async function record(job: PostJob, p: Extract<Prepared, { kind: 'post' }>, resu
         response: r.json, attempts: r.attempt, latencyMs: r.latencyMs,
       }).onConflictDoNothing();
       if (ok) {
-        // Also from outcome_unknown: a stalled duplicate run may have marked it while this call was in flight.
-        await settle(tx, invoiceId, ['posting', 'outcome_unknown'], postedFields(r.json, irn, r.attempt),
-          { actor: 'system', action: 'Posted to FBR', detail: irn });
+        try {
+          // Savepoint, so a refused update still leaves FBR's response in api_calls.
+          // Also from outcome_unknown: a stalled duplicate run may have marked it while this call was in flight.
+          await tx.transaction(sp => settle(sp, invoiceId, ['posting', 'outcome_unknown'], postedFields(r.json, irn, r.attempt),
+            { actor: 'system', action: 'Posted to FBR', detail: irn }));
+        } catch (e) {
+          if (pgCode(e) !== PG.uniqueViolation) throw e;
+          // FBR returned an invoice number Rasid already holds on another invoice: a person must look at IRIS.
+          await settle(tx, invoiceId, ['posting', 'outcome_unknown'], {
+            status: 'outcome_unknown',
+            issues: [{ code: 'L-409', message: `FBR answered with invoice number ${irn}, which another invoice in Rasid already has.`, hint: UNKNOWN_HINT, source: 'fbr' }],
+          }, { actor: 'system', action: 'Post outcome unknown', detail: `Duplicate FBR number ${irn}` });
+        }
       } else {
         await settle(tx, invoiceId, ['posting'], { status: 'failed', issues, attempts: r.attempt },
           { actor: 'system', action: 'Rejected by FBR', detail: issues.map(i => `${i.code} ${i.message}`).join('; ') });

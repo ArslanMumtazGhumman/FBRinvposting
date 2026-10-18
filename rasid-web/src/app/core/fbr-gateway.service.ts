@@ -32,14 +32,16 @@ export interface FbrCall {
 @Injectable({ providedIn: 'root' })
 export class FbrGatewayService {
   private http = inject(HttpClient);
-  private readonly mock = environment.mockFbr;
+  private readonly mock = !environment.useApi;
 
   validate(call: FbrCall): Promise<FbrResponse> {
     return this.mock ? this.simulate(call, false) : this.send('validate', call);
   }
 
+  /** Offline demo only. With the API, posting goes through the server queue (PostingService). */
   post(call: FbrCall): Promise<FbrResponse> {
-    return this.mock ? this.simulate(call, true) : this.send('post', call);
+    if (!this.mock) return Promise.reject(new Error('Posting goes through the server queue.'));
+    return this.simulate(call, true);
   }
 
   /** Registration-type check via /dist/v1/Get_Reg_Type (proxied). */
@@ -54,7 +56,7 @@ export class FbrGatewayService {
     return t === 'registered' ? 'Registered' : t === 'unregistered' ? 'Unregistered' : 'Unknown';
   }
 
-  private async send(kind: 'validate' | 'post', call: FbrCall): Promise<FbrResponse> {
+  private async send(kind: 'validate', call: FbrCall): Promise<FbrResponse> {
     try {
       return await firstValueFrom(this.http.post<FbrResponse>(
         `${environment.apiBaseUrl}/fbr/${call.businessId}/${kind}`,

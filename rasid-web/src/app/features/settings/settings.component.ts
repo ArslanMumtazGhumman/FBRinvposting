@@ -3,9 +3,10 @@ import { ChangeDetectionStrategy, Component, effect, inject, signal } from '@ang
 import { FormsModule } from '@angular/forms';
 import { firstValueFrom } from 'rxjs';
 import { environment } from '../../../environments/environment';
+import { errorMessage } from '../../core/api';
 import { ACTIVITIES, PROVINCES, SALE_TYPES, SECTORS } from '../../core/fbr-reference';
 import { Business, FbrEnvironment } from '../../core/models';
-import { StoreService } from '../../core/store.service';
+import { Store } from '../../core/store';
 import { cleanNtn } from '../../core/tax';
 import { UiService } from '../../core/ui.service';
 import { sleep, uid } from '../../core/util';
@@ -129,10 +130,12 @@ type Tab = 'business' | 'fbr' | 'defaults' | 'team' | 'add';
                 <p class="subtle">Owners must use an authenticator app. Sessions end after 12 hours or 30 minutes idle.</p>
               </div>
             </section>
+            @if (store.mode === 'local') {
             <section class="panel mt">
               <div class="panel-head"><h2>Demo data</h2></div>
               <div class="panel-body row"><span class="muted">Clears everything stored in this browser and reloads the sample business.</span><span class="spacer"></span><button class="btn btn-danger" (click)="store.resetDemo()">Reset demo data</button></div>
             </section>
+            }
           }
           @case ('add') {
             <section class="panel">
@@ -173,7 +176,7 @@ type Tab = 'business' | 'fbr' | 'defaults' | 'team' | 'add';
   `],
 })
 export class SettingsComponent {
-  protected store = inject(StoreService);
+  protected store = inject(Store);
   private ui = inject(UiService);
   private http = inject(HttpClient);
 
@@ -199,18 +202,22 @@ export class SettingsComponent {
 
   protected layouts = () => this.store.mappings().filter(m => m.businessId === this.store.business()?.id);
   protected mappedCount = (m: Record<string, string>) => Object.values(m).filter(Boolean).length;
-  deleteLayout(id: string) { this.store.mappings.update(l => l.filter(m => m.id !== id)); }
+  deleteLayout(id: string) { this.store.deleteMapping(id).catch(e => this.ui.toast(errorMessage(e, 'Could not forget the layout'), 'error')); }
 
-  saveBiz(d: Business) {
-    this.store.updateBusiness({ ...d, ntnCnic: cleanNtn(d.ntnCnic), furtherTaxRate: Number(d.furtherTaxRate) || 0, nextInvoiceNo: Math.max(1, Math.floor(d.nextInvoiceNo)) });
-    this.ui.toast('Saved');
+  async saveBiz(d: Business) {
+    try {
+      await this.store.updateBusiness({ ...d, ntnCnic: cleanNtn(d.ntnCnic), furtherTaxRate: Number(d.furtherTaxRate) || 0, nextInvoiceNo: Math.max(1, Math.floor(d.nextInvoiceNo)) });
+      this.ui.toast('Saved');
+    } catch (e) { this.ui.toast(errorMessage(e, 'Could not save'), 'error'); }
   }
 
-  setEnv(env: FbrEnvironment) {
+  async setEnv(env: FbrEnvironment) {
     const b = this.store.business()!;
     if (env === 'production' && !confirm('Switch to production? Invoices you post from now on are reported to FBR as real tax invoices.')) return;
-    this.store.updateBusiness({ ...b, environment: env });
-    this.ui.toast(env === 'production' ? 'Production mode on' : 'Sandbox mode on', 'info');
+    try {
+      await this.store.updateBusiness({ ...b, environment: env });
+      this.ui.toast(env === 'production' ? 'Production mode on' : 'Sandbox mode on', 'info');
+    } catch (e) { this.ui.toast(errorMessage(e, 'Could not switch'), 'error'); }
   }
 
   setTokenInput(env: FbrEnvironment, v: string) { this.tokenInput.update(t => ({ ...t, [env]: v })); }
@@ -222,12 +229,13 @@ export class SettingsComponent {
     this.savingToken.set(true);
     try {
       let hint = '••••' + token.slice(-4);
-      if (!environment.mockFbr) {
+      if (environment.useApi) {
         const r = await firstValueFrom(this.http.put<{ hint: string }>(`${environment.apiBaseUrl}/businesses/${b.id}/credentials/${env}`, { token }));
         hint = r.hint;
       } else { await sleep(300); }
-      // The token itself is dropped here; only the hint is kept client-side.
-      this.store.updateBusiness(env === 'sandbox' ? { ...b, hasSandboxToken: true, tokenHintSandbox: hint } : { ...b, hasProductionToken: true, tokenHintProduction: hint });
+      // The token itself is dropped here; only the hint is kept client-side (the API already saved the token).
+      const flags = env === 'sandbox' ? { hasSandboxToken: true, tokenHintSandbox: hint } : { hasProductionToken: true, tokenHintProduction: hint };
+      this.store.businesses.update(l => l.map(x => x.id === b.id ? { ...x, ...flags } : x));
       this.setTokenInput(env, '');
       this.ui.toast(`${env === 'sandbox' ? 'Sandbox' : 'Production'} token saved`);
     } catch (e) {
@@ -239,7 +247,7 @@ export class SettingsComponent {
     const b = this.store.business()!;
     this.testing.set(true);
     try {
-      if (environment.mockFbr) await sleep(600);
+      if (!environment.useApi) await sleep(600);
       else await firstValueFrom(this.http.post(`${environment.apiBaseUrl}/businesses/${b.id}/credentials/${env}/test`, {}));
       this.ui.toast('FBR accepted the token');
     } catch { this.ui.toast('FBR did not accept the token. Generate a new one in IRIS.', 'error'); }
@@ -252,8 +260,10 @@ export class SettingsComponent {
     return { id: '', name: '', ntnCnic: '', province: 'Punjab', address: '', activity: 'Wholesaler', sector: 'All Other Sectors', environment: 'sandbox',
       hasSandboxToken: false, hasProductionToken: false, defaultSaleType: 'Goods at standard rate (default)', furtherTaxRate: 4, invoicePrefix: 'INV-', nextInvoiceNo: 1 };
   }
-  addBiz() {
-    this.store.addBusiness({ ...this.newBiz, id: uid('b_'), ntnCnic: cleanNtn(this.newBiz.ntnCnic) });
+  async addBiz() {
+    try {
+      await this.store.addBusiness({ ...this.newBiz, id: uid('b_'), ntnCnic: cleanNtn(this.newBiz.ntnCnic) });
+    } catch (e) { this.ui.toast(errorMessage(e, 'Could not add the business'), 'error'); return; }
     this.newBiz = this.blankBiz();
     this.tab.set('fbr');
     this.ui.toast('Business added. Now connect it to FBR.');

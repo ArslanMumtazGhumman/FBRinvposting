@@ -1,7 +1,7 @@
 import { ChangeDetectionStrategy, Component, HostListener, computed, inject, signal } from '@angular/core';
 import { Router, RouterLink, RouterLinkActive, RouterOutlet } from '@angular/router';
 import { AuthService } from '../core/auth';
-import { StoreService } from '../core/store.service';
+import { Store } from '../core/store';
 import { UiService } from '../core/ui.service';
 import { IconComponent } from '../shared/icon.component';
 
@@ -115,7 +115,7 @@ import { IconComponent } from '../shared/icon.component';
   `],
 })
 export class ShellComponent {
-  protected store = inject(StoreService);
+  protected store = inject(Store);
   protected ui = inject(UiService);
   protected auth = inject(AuthService);
   protected router = inject(Router);
@@ -132,7 +132,7 @@ export class ShellComponent {
   ];
 
   protected isProd = computed(() => this.store.business()?.environment === 'production');
-  protected failedCount = computed(() => this.store.bizInvoices().filter(i => i.status === 'failed').length);
+  protected failedCount = computed(() => this.store.bizInvoices().filter(i => i.status === 'failed' || i.status === 'outcome_unknown').length);
   protected initials = computed(() => (this.store.user()?.name ?? '?').split(' ').map(s => s[0]).slice(0, 2).join('').toUpperCase());
 
   switchBiz(id: string) { this.store.activeBusinessId.set(id); }

@@ -1,8 +1,9 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { errorMessage } from '../../core/api';
 import { HS_SAMPLE, SALE_TYPES, UOMS, saleTypeDef } from '../../core/fbr-reference';
 import { Product } from '../../core/models';
-import { StoreService } from '../../core/store.service';
+import { Store } from '../../core/store';
 import { UiService } from '../../core/ui.service';
 import { formatPkr, uid } from '../../core/util';
 import { IconComponent } from '../../shared/icon.component';
@@ -51,7 +52,7 @@ import { IconComponent } from '../../shared/icon.component';
           <tbody>
             @for (p of store.bizProducts(); track p.id) {
               <tr><td><b>{{ p.name }}</b></td><td>{{ p.hsCode }}</td><td>{{ p.uoM }}</td><td>{{ p.saleType }}</td><td>{{ p.rate }}</td><td class="num">{{ fmt(p.unitPrice, 2) }}</td>
-                <td class="num"><button class="btn btn-sm btn-ghost" (click)="edit(p)">Edit</button><button class="btn btn-sm btn-ghost btn-danger" (click)="store.deleteProduct(p.id)">Delete</button></td></tr>
+                <td class="num"><button class="btn btn-sm btn-ghost" (click)="edit(p)">Edit</button><button class="btn btn-sm btn-ghost btn-danger" (click)="remove(p)">Delete</button></td></tr>
             } @empty { <tr><td colspan="7"><div class="empty"><h3>No products yet</h3><p>Add your common items to fill invoice lines faster.</p></div></td></tr> }
           </tbody>
         </table>
@@ -72,7 +73,7 @@ import { IconComponent } from '../../shared/icon.component';
   `],
 })
 export class ProductsComponent {
-  protected store = inject(StoreService);
+  protected store = inject(Store);
   private ui = inject(UiService);
   protected uoms = UOMS;
   protected saleTypes = SALE_TYPES;
@@ -93,5 +94,14 @@ export class ProductsComponent {
     this.draft.set(p ? { ...p } : { id: '', businessId: b.id, name: '', hsCode: '', uoM: UOMS[0], saleType: b.defaultSaleType, rate: this.rates(b.defaultSaleType)[0], unitPrice: 0 });
   }
   pickHs(d: Product, code: string, uom: string) { d.hsCode = code; d.uoM = uom; this.hsQuery.set(''); this.draft.set({ ...d }); }
-  save(d: Product) { this.store.upsertProduct({ ...d, id: d.id || uid('p_') }); this.draft.set(null); this.ui.toast('Product saved'); }
+  remove(p: Product) {
+    this.store.deleteProduct(p.id).catch(e => this.ui.toast(errorMessage(e, 'Could not delete the product'), 'error'));
+  }
+  async save(d: Product) {
+    try {
+      await this.store.upsertProduct({ ...d, id: d.id || uid('p_') });
+      this.draft.set(null);
+      this.ui.toast('Product saved');
+    } catch (e) { this.ui.toast(errorMessage(e, 'Could not save the product'), 'error'); }
+  }
 }

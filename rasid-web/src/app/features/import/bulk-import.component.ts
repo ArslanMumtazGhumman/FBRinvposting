@@ -2,11 +2,12 @@ import { ScrollingModule } from '@angular/cdk/scrolling';
 import { ChangeDetectionStrategy, Component, OnDestroy, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
+import { errorMessage } from '../../core/api';
 import { FbrGatewayService } from '../../core/fbr-gateway.service';
 import { TARGET_FIELDS, buildInvoices, headerSignature, suggestMapping } from '../../core/import/smart-mapper';
 import { FieldIssue, Invoice, LineItem } from '../../core/models';
 import { PostingService, issuesFromResponse } from '../../core/posting.service';
-import { StoreService } from '../../core/store.service';
+import { Store } from '../../core/store';
 import { cleanNtn, computeLine, normaliseRate, toPayload, validateInvoice } from '../../core/tax';
 import { UiService } from '../../core/ui.service';
 import { formatPkr, nowIso, uid } from '../../core/util';
@@ -168,10 +169,21 @@ const MAX_ROWS = 50000;
       <section class="panel post-panel">
         <div class="panel-body">
           @let p = posting.progress();
+          @if (saving(); as s) {
+          <div class="row"><h2>Saving invoices…</h2></div>
+          <div class="progress big"><div [style.width.%]="s.total ? (s.done / s.total) * 100 : 0"></div></div>
+          <div class="counters"><div><b>{{ s.done }}</b> of {{ s.total }} saved</div></div>
+          } @else {
+          @if (saveErrors().length) {
+            <div class="save-errors">
+              <b>{{ saveErrors().length }} invoice(s) could not be saved and were not posted</b>
+              <ul>@for (e of saveErrors().slice(0, 20); track $index) { <li>{{ e }}</li> }</ul>
+            </div>
+          }
           <div class="row">
             <h2>{{ p.running ? 'Posting to FBR…' : 'Import finished' }}</h2>
             <span class="spacer"></span>
-            @if (p.running) {
+            @if (p.running && posting.canPause) {
               @if (p.paused) { <button class="btn" (click)="posting.resume()"><app-icon name="play" /> Resume</button> }
               @else { <button class="btn" (click)="posting.pause()"><app-icon name="pause" /> Pause</button> }
               <button class="btn btn-ghost btn-danger" (click)="posting.cancel()">Stop</button>
@@ -191,6 +203,7 @@ const MAX_ROWS = 50000;
               <a class="btn" routerLink="/invoices">View invoices</a>
               <button class="btn btn-ghost" (click)="reset()">Import another file</button>
             </div>
+          }
           }
         </div>
       </section>
@@ -249,11 +262,13 @@ const MAX_ROWS = 50000;
     .counters { display: flex; gap: 28px; flex-wrap: wrap; font-size: var(--fs-m); }
     .counters .ok b { color: var(--accent); } .counters .bad b { color: var(--danger); }
     .actions { gap: 10px; }
+    .save-errors { margin-bottom: 16px; padding: 10px 12px; border-radius: 8px; background: var(--danger-soft); color: var(--danger); font-size: var(--fs-s); }
+    .save-errors ul { margin: 6px 0 0; padding-left: 18px; }
     @media (max-width: 900px) { .summary { grid-template-columns: repeat(2, 1fr); } }
   `],
 })
 export class BulkImportComponent implements OnDestroy {
-  protected store = inject(StoreService);
+  protected store = inject(Store);
   protected posting = inject(PostingService);
   private fbr = inject(FbrGatewayService);
   private ui = inject(UiService);
@@ -276,6 +291,9 @@ export class BulkImportComponent implements OnDestroy {
   protected validating = signal(false);
   protected validated = signal(0);
   protected batchId = '';
+  /** Saving to the store before posting (the API store sends chunks of 500). */
+  protected saving = signal<{ done: number; total: number } | null>(null);
+  protected saveErrors = signal<string[]>([]);
   protected fmt = (n: number) => formatPkr(n);
   private worker?: Worker;
 
@@ -377,7 +395,8 @@ export class BulkImportComponent implements OnDestroy {
   toReview() {
     const f = this.file()!; const biz = this.store.business()!;
     if (this.saveTemplate && !this.templateUsed()) {
-      this.store.saveMapping({ id: uid('m_'), businessId: biz.id, name: f.name.replace(/\.[^.]+$/, ''), signature: headerSignature(f.headers), map: this.mapping() as Record<string, string>, createdAt: nowIso() });
+      this.store.saveMapping({ id: uid('m_'), businessId: biz.id, name: f.name.replace(/\.[^.]+$/, ''), signature: headerSignature(f.headers), map: this.mapping() as Record<string, string>, createdAt: nowIso() })
+        .catch(e => this.ui.toast(errorMessage(e, 'Could not save the column layout'), 'error'));
     }
     this.batchId = uid('bt_');
     const { invoices } = buildInvoices(f.rows, this.mapping(), biz, this.batchId);
@@ -473,11 +492,21 @@ export class BulkImportComponent implements OnDestroy {
     const ready: Invoice[] = []; const rest: Invoice[] = [];
     this.invoices().forEach((v, i) => (this.issuesFor(i).length ? rest : ready).push(v));
     const toSave = this.keepInvalid ? [...ready, ...rest.map((v, k) => ({ ...v, issues: this.issuesFor(this.invoices().indexOf(rest[k])) }))] : ready;
-    this.store.upsertMany(toSave);
     this.step.set(4);
-    await this.posting.postBatch(ready.map(v => v.id));
-    const p = this.posting.progress();
-    this.ui.toast(`${p.posted} invoices posted to FBR`, p.failed ? 'info' : 'ok');
+    this.saveErrors.set([]);
+    this.saving.set({ done: 0, total: toSave.length });
+    let saved: Set<string>;
+    try {
+      const r = await this.store.upsertMany(toSave, (done, total) => this.saving.set({ done, total }));
+      saved = new Set(r.saved.map(v => v.id));
+      this.saveErrors.set(r.errors.map(e => `${e.localRef ?? `Invoice ${e.index + 1}`}: ${e.message}`));
+    } finally { this.saving.set(null); }
+    const toPost = ready.filter(v => saved.has(v.id)).map(v => v.id);
+    try {
+      await this.posting.postBatch(toPost);
+      const p = this.posting.progress();
+      this.ui.toast(`${p.posted} invoices posted to FBR`, p.failed || this.saveErrors().length ? 'info' : 'ok');
+    } catch (e) { this.ui.toast(errorMessage(e, 'Could not start posting'), 'error'); }
   }
 
   async downloadResult() {
@@ -505,7 +534,7 @@ export class BulkImportComponent implements OnDestroy {
   reset() {
     this.showAllFields.set(false);
     this.step.set(1); this.file.set(null); this.invoices.set([]); this.fbrIssues.set(new Map());
-    this.mapping.set({}); this.templateUsed.set('');
+    this.mapping.set({}); this.templateUsed.set(''); this.saveErrors.set([]);
   }
 
   async downloadTemplate() {

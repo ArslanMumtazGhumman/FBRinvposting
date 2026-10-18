@@ -5,7 +5,7 @@ Post sales-tax invoices to FBR's Digital Invoicing API (PRAL spec v1.12) from a 
 ```
 rasid/
 ├── rasid-web/   Angular 21 app (standalone components, signals, zoneless, CDK virtual scroll, SheetJS in a Web Worker)
-├── rasid-api/   Node 22 + TypeScript API (PostgreSQL 16 + Drizzle, row-level security): sessions + 2FA, AES-256-GCM token vault, FBR gateway with retry/idempotency, audit chain
+├── rasid-api/   Node 22 + TypeScript API (PostgreSQL 16 + Drizzle, row-level security, BullMQ posting worker on Redis): sessions + 2FA, AES-256-GCM token vault, audit chain
 ├── docker-compose.yml
 └── .github/workflows/ci.yml
 ```
@@ -18,7 +18,8 @@ npm install          # .npmrc sets legacy-peer-deps
 npm start            # http://localhost:4200
 ```
 
-The development build runs an in-browser FBR simulator: real PRAL-shaped responses, error codes
+The development build (`useApi: false` in `environment.development.ts`) keeps all data in the browser's
+localStorage and runs an in-browser FBR simulator: real PRAL-shaped responses, error codes
 (0019, 0046, 0096, 0102, 0104 …), IRN generation, and ~4% random HTTP 500s so you can watch retries.
 Sign in with any email and an 8+ character password. Sample business, customers, products and
 42 invoices are pre-loaded. On **Bulk import**, click **Try with sample data** to load a messy sheet
@@ -36,7 +37,9 @@ npx tsx --env-file=.env src/seed.ts owner@company.pk "Owner Name" "a-strong-pass
 cd .. && docker compose up --build      # web + api on http://localhost:8080
 ```
 
-Production builds (`ng build`) use `environment.ts`: `mockFbr: false`, API at same-origin `/api`.
+Production builds (`ng build`) use `environment.ts`: `useApi: true`, API at same-origin `/api`. All data then lives
+in Postgres and posting runs on the server queue. To develop the web app against a local API, set
+`useApi: true` in `environment.development.ts` (API on `http://localhost:3000/api`, `CORS_ORIGINS=http://localhost:4200`).
 Then in the app: Settings → FBR connection → paste the sandbox token from IRIS → Sandbox scenarios → Run all.
 
 ## API development
@@ -73,6 +76,7 @@ header on writes. Every body is validated with zod (`rasid-api/src/schemas`); a 
 | `GET /invoices/batches/:batchId` | Progress: `{ total, queued, posting, posted, failed, outcomeUnknown, done, running }` |
 | `GET /invoices/batches/:batchId/events` | Same progress as Server-Sent Events: `progress`, `invoice` (status, IRN, issues), then `done` |
 | `PUT /credentials/:env`, `POST /credentials/:env/test` | Tokens are write-only |
+| `POST /api/businesses`, `PUT /api/businesses/:businessId` | Add a business (tenant owners; you become its owner) / update profile and defaults (business owners) |
 
 FBR lookups stay synchronous under `/api/fbr/:businessId`: `POST /validate`, `GET /reference/:kind`,
 `POST /reg-type`. Posting happens only in the worker (`node dist/worker.js`): at most 3 FBR calls in
@@ -87,7 +91,8 @@ flight per business, a timed-out post becomes `outcome_unknown` and is never ret
 | Reference data, sale types, 28 scenarios, activity×sector matrix, error help | `rasid-web/src/app/core/fbr-reference.ts` |
 | Smart column matching (synonyms + content sniffing), date/UOM/province normalising, row grouping | `rasid-web/src/app/core/import/smart-mapper.ts` |
 | Excel parsing off the main thread | `rasid-web/src/app/core/import/excel.worker.ts` |
-| Validate → post orchestration (offline demo: in-browser queue) | `rasid-web/src/app/core/posting.service.ts` |
+| Client state: one `Store` contract, offline (`StoreService`, localStorage) or API-backed (`ApiStoreService`) | `rasid-web/src/app/core/store.ts`, `store.service.ts`, `api-store.service.ts` |
+| Validate → post orchestration (offline: in-browser queue; API: server queue + SSE) | `rasid-web/src/app/core/posting.service.ts` |
 | FBR simulator / HTTP gateway switch | `rasid-web/src/app/core/fbr-gateway.service.ts` |
 | Token vault (AES-256-GCM, key versions, AAD = business) | `rasid-api/src/lib/vault.ts` |
 | Login, scrypt, TOTP, lockout, cookie session, CSRF | `rasid-api/src/lib/auth.ts` |
@@ -106,9 +111,9 @@ flight per business, a timed-out post becomes `outcome_unknown` and is never ret
 
 ## Before going live
 
-- **Invoices:** the web app keeps invoices in the browser (localStorage) in this version. Add
-  `/api/invoices` CRUD backed by Postgres before onboarding real customers, so records survive device
-  changes and are covered by backups.
+- **Large businesses:** the web app caches the newest 5,000 invoices of the active business and filters
+  them in the browser. Move the invoice list to server-side filtering and paging (the API already supports
+  it) before a business passes that.
 - **Keys:** load `VAULT_KEY_*` from KMS/Vault, not a file. Rotate by adding `VAULT_KEY_V2` and
   switching `VAULT_ACTIVE_KEY`.
 - **FBR logo:** the invoice print view has a placeholder box. Use the official Digital Invoicing System

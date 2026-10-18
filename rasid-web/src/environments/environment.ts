@@ -1,10 +1,11 @@
 /**
  * Production build settings.
- * mockFbr=false → all FBR calls go through the Rasid API (rasid-api), which holds
- * the encrypted bearer tokens. The browser never sees a token after it is saved.
+ * useApi=true → data comes from the Rasid API (ApiStoreService) and every FBR
+ * call goes through it; posting runs on the server queue. The API holds the
+ * encrypted bearer tokens: the browser never sees a token after it is saved.
  */
 export const environment = {
   production: true,
-  mockFbr: false,
+  useApi: true,
   apiBaseUrl: '/api',
 };

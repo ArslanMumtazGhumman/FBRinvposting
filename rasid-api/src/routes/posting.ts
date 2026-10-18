@@ -73,6 +73,7 @@ postingRoutes.get('/batches/:batchId', ...canRead, async (req, res) => {
  *   event: progress  BatchProgress (whenever the counts change)
  *   event: invoice   one invoice's new status / IRN / issues
  *   event: done      final BatchProgress, then the stream closes
+ *   event: interrupted  the server could not read progress; the client falls back to polling
  * Reads the database every BATCH_POLL_MS, so it works with any number of
  * API and worker processes. Reconnecting replays the current state.
  */
@@ -121,7 +122,7 @@ postingRoutes.get('/batches/:batchId/events', ...canRead, async (req, res) => {
     }
   } catch (e) {
     console.error(JSON.stringify({ at: new Date().toISOString(), path: req.path, error: String((e as Error).message).slice(0, 300) }));
-    send('error', { message: 'Progress updates stopped. Reload to see the latest status.' });
+    send('interrupted', { message: 'Progress updates stopped. Reload to see the latest status.' });
   }
   res.end();
 });

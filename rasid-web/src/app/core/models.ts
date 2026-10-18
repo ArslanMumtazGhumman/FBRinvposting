@@ -7,7 +7,8 @@
 export type InvoiceType = 'Sale Invoice' | 'Debit Note';
 export type RegistrationType = 'Registered' | 'Unregistered';
 export type FbrEnvironment = 'sandbox' | 'production';
-export type InvoiceStatus = 'draft' | 'validated' | 'queued' | 'posting' | 'posted' | 'failed';
+/** outcome_unknown: FBR timed out on post; it may have recorded the invoice, so a person checks IRIS before posting again. */
+export type InvoiceStatus = 'draft' | 'validated' | 'queued' | 'posting' | 'posted' | 'failed' | 'outcome_unknown';
 export type Role = 'owner' | 'accountant' | 'viewer';
 
 export interface FbrItem {

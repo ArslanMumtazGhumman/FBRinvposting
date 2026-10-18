@@ -1,9 +1,10 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, input, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
+import { errorMessage } from '../../core/api';
 import { InvoiceStatus } from '../../core/models';
 import { PostingService } from '../../core/posting.service';
-import { StoreService } from '../../core/store.service';
+import { Store } from '../../core/store';
 import { invoiceTotals } from '../../core/tax';
 import { UiService } from '../../core/ui.service';
 import { formatPkr } from '../../core/util';
@@ -63,8 +64,10 @@ const PAGE = 50;
           <span class="spacer"></span>
           <span class="ok">{{ posting.progress().posted }} posted</span>
           <span class="bad">{{ posting.progress().failed }} rejected</span>
-          @if (posting.progress().paused) { <button class="btn btn-sm" (click)="posting.resume()"><app-icon name="play" /> Resume</button> }
-          @else { <button class="btn btn-sm" (click)="posting.pause()"><app-icon name="pause" /> Pause</button> }
+          @if (posting.canPause) {
+            @if (posting.progress().paused) { <button class="btn btn-sm" (click)="posting.resume()"><app-icon name="play" /> Resume</button> }
+            @else { <button class="btn btn-sm" (click)="posting.pause()"><app-icon name="pause" /> Pause</button> }
+          }
         </div>
         <div class="progress"><div [style.width.%]="posting.percent()"></div></div>
       </div>
@@ -138,7 +141,7 @@ const PAGE = 50;
   `],
 })
 export class InvoiceListComponent {
-  protected store = inject(StoreService);
+  protected store = inject(Store);
   protected posting = inject(PostingService);
   private ui = inject(UiService);
   private router = inject(Router);
@@ -168,7 +171,7 @@ export class InvoiceListComponent {
   }
 
   private matches(s: InvoiceStatus, f: Filter) {
-    return f === 'all' || (f === 'draft' ? ['draft', 'validated', 'queued', 'posting'].includes(s) : s === f);
+    return f === 'all' || (f === 'draft' ? ['draft', 'validated', 'queued', 'posting'].includes(s) : f === 'failed' ? s === 'failed' || s === 'outcome_unknown' : s === f);
   }
   protected count = (f: Filter) => this.store.bizInvoices().filter(i => this.matches(i.status, f)).length;
 
@@ -184,8 +187,8 @@ export class InvoiceListComponent {
   protected allChecked = computed(() => this.pageRows().length > 0 && this.pageRows().every(r => this.selected().has(r.id)));
 
   private selectedInvoices = computed(() => this.store.bizInvoices().filter(i => this.selected().has(i.id)));
-  protected postable = computed(() => this.selectedInvoices().filter(i => i.status !== 'posted' && i.status !== 'posting'));
-  protected deletable = computed(() => this.selectedInvoices().filter(i => i.status !== 'posted'));
+  protected postable = computed(() => this.selectedInvoices().filter(i => ['draft', 'validated', 'failed'].includes(i.status)));
+  protected deletable = computed(() => this.selectedInvoices().filter(i => ['draft', 'validated', 'failed'].includes(i.status)));
 
   private totalsCache = new WeakMap<object, ReturnType<typeof invoiceTotals>>();
   protected tot(i: { items: Parameters<typeof invoiceTotals>[0] }) {
@@ -202,7 +205,7 @@ export class InvoiceListComponent {
     this.selected.update(s => { const n = new Set(s); this.pageRows().forEach(r => all ? n.delete(r.id) : n.add(r.id)); return n; });
   }
   open(id: string, status: InvoiceStatus) {
-    this.router.navigate(status === 'posted' ? ['/invoices', id] : ['/invoices', id, 'edit']);
+    this.router.navigate(['draft', 'validated', 'failed'].includes(status) ? ['/invoices', id, 'edit'] : ['/invoices', id]);
   }
 
   async validateSelected() {
@@ -218,18 +221,22 @@ export class InvoiceListComponent {
   async postSelected() {
     const ids = this.postable().map(i => i.id);
     this.busy.set(true); this.selected.set(new Set());
-    await this.posting.postBatch(ids);
-    this.busy.set(false);
-    const p = this.posting.progress();
-    this.ui.toast(`${p.posted} posted to FBR${p.failed ? `, ${p.failed} rejected` : ''}`, p.failed ? 'info' : 'ok');
+    try {
+      await this.posting.postBatch(ids);
+      const p = this.posting.progress();
+      this.ui.toast(`${p.posted} posted to FBR${p.failed ? `, ${p.failed} not posted` : ''}${p.skipped ? `, ${p.skipped} skipped` : ''}`, p.failed || p.skipped ? 'info' : 'ok');
+    } catch (e) { this.ui.toast(errorMessage(e, 'Could not start posting'), 'error'); }
+    finally { this.busy.set(false); }
   }
 
-  deleteSelected() {
+  async deleteSelected() {
     const list = this.deletable();
     if (!confirm(`Delete ${list.length} unposted invoice(s)? Posted invoices are kept.`)) return;
-    list.forEach(i => this.store.deleteInvoice(i.id));
     this.selected.set(new Set());
-    this.ui.toast(`Deleted ${list.length} invoice(s)`);
+    const results = await Promise.allSettled(list.map(i => this.store.deleteInvoice(i.id)));
+    const failed = results.filter(r => r.status === 'rejected');
+    if (failed.length) this.ui.toast(`Deleted ${list.length - failed.length}; ${failed.length} could not be deleted: ${errorMessage((failed[0] as PromiseRejectedResult).reason)}`, 'error');
+    else this.ui.toast(`Deleted ${list.length} invoice(s)`);
   }
 
   exportCsv() {

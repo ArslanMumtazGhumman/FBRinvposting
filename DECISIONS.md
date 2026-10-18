@@ -134,3 +134,51 @@ Choices made where the brief left room. Simpler option first; revisit if it hurt
   `dist/worker.js`. The worker has no HTTP port, so its service must disable the image's healthcheck.
 - **Until step 5 the production web build can't post.** `FbrGatewayService.post` still calls the removed
   route. The offline demo (`npm start`, mock FBR) is unaffected. Step 5 switches `PostingService` to the queue.
+
+### Step 5: Frontend on the API
+- **`Store` (abstract class) is the DI token; the two implementations sit behind it.** `StoreService`
+  (offline, localStorage) and `ApiStoreService` (HttpClient) extend `Store`. The signals and computed
+  selectors live in `Store`, so components see the same surface either way. `app.config.ts` picks the
+  implementation from `environment.useApi`. Components now `inject(Store)`.
+- **One flag, `useApi`, replaces `mockFbr`.** Two flags would allow combinations that make no sense
+  (API data with a simulated FBR). `npm start` → `useApi: false` (offline demo); `ng build` → `useApi: true`.
+  `PostingService` follows `store.mode` rather than reading the flag itself, so it can't disagree with the store.
+- **Writes are async and optimistic.** Every write method returns a promise. The API store shows the
+  change at once, sends it, replaces it with the server's copy, and puts the old value back if the API
+  refuses; the promise then rejects with the API's message and the page shows it. Writes to one record
+  are queued, so save-then-edit can't arrive out of order (a PUT before its POST).
+  - `patchInvoice` stays synchronous and only updates the cache. With the API, posting results come from the server.
+  - The client always sends `draft` or `validated`; it can't set `failed`, `posted` or history.
+- **The API store caches the newest 5,000 invoices of the active business.** The list, dashboard and
+  editor work on that cache, as they did with localStorage. Server-side list filtering is a follow-up (README).
+- **Invoice numbers.** The editor still shows the next number as you type (`nextLocalRef` moves only
+  the cached counter). On save, the server moves its own counter past any number in the business's
+  `PREFIX + digits` format, so server-allocated numbers never collide with ones the browser showed.
+  Two people creating at the same moment can still pick the same number; the second save gets a 409.
+- **Business create/update endpoints** (`POST /api/businesses`, `PUT /api/businesses/:id`).
+  - Creating goes through a `SECURITY DEFINER` function, `create_business(jsonb)`. It adds the business to the caller's tenant and makes them the owner, and only users whose tenant role is `owner` may call it. The API role still can't insert businesses or memberships directly.
+  - Updating is for business owners. A change of environment is audited as `environment_production` / `environment_sandbox`.
+- **Session restore.** In API mode nothing about the user is kept in localStorage. `authGuard` calls
+  `GET /auth/me` once on a reload, and a 401 on any call signs the user out. Pages that look a record up by id
+  (the editor) wait for `store.ready()`, so a reload on `/invoices/:id/edit` doesn't open a blank "new" invoice.
+- **Bulk import.**
+  - The Excel file is still parsed in the Web Worker. The built invoices are saved with `POST /invoices/bulk` in chunks of 500, with a saving progress bar.
+  - Rows the server refuses are listed by invoice number and not posted.
+  - The saved, valid ones are queued in one batch.
+- **Posting with the API.**
+  - `PostingService` queues (`/post` or `/post-batch`) and follows the batch over `EventSource` (SSE). It updates each invoice as `invoice` events arrive, then reloads the batch (`GET /invoices?batchId=`) so history and IRNs match the server exactly.
+  - If the stream fails (proxy buffering, network drop), it closes it, to stop the browser auto-reconnecting, and polls `GET /batches/:id` every 2 s.
+  - Pause/Resume/Stop are hidden in API mode: the server queue can't pause one batch.
+- **Server issues carry no hint text;** the web app adds `FBR_ERROR_HELP[code]` when results arrive.
+- **`outcome_unknown` in the UI.**
+  - The chip reads "Check IRIS". Those invoices count with the rejected ones on the dashboard and in the list filter, and open read-only.
+  - The detail page offers "Not in IRIS: post again". It asks for confirmation and sends `confirmNotInIris`.
+- **Sandbox scenarios with the API** create a real test invoice and post it through the queue, because the
+  synchronous post route is gone. The test invoices appear in the sandbox invoice list.
+- **The worker now keeps FBR's response when the invoice update is refused.** The browser e2e run found it: a
+  duplicate IRN from the fake FBR rolled back the api_calls row together with the invoice update. The
+  update now runs in a savepoint. A duplicate IRN becomes `outcome_unknown` (`L-409`), and the api_calls row
+  with FBR's answer is kept.
+- **Web unit tests** (`ng test`, Vitest + HttpTestingController) cover `ApiStoreService` and the queue path
+  of `PostingService`. Shared fixtures live in `src/testing/`, excluded from the app build. CI runs them.
+  Vitest for `tax.ts` / `smart-mapper.ts` is step 7.

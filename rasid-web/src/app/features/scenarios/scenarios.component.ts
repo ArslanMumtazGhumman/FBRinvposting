@@ -1,14 +1,15 @@
 import { ChangeDetectionStrategy, Component, computed, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
+import { errorMessage } from '../../core/api';
 import { FbrGatewayService } from '../../core/fbr-gateway.service';
 import { ACTIVITIES, SCENARIOS, SECTORS, applicableScenarios, saleTypeDef } from '../../core/fbr-reference';
 import { Invoice, LineItem } from '../../core/models';
-import { issuesFromResponse } from '../../core/posting.service';
-import { StoreService } from '../../core/store.service';
+import { PostingService, issuesFromResponse } from '../../core/posting.service';
+import { Store } from '../../core/store';
 import { computeLine, emptyLine, toPayload } from '../../core/tax';
 import { UiService } from '../../core/ui.service';
-import { nowIso, todayIso } from '../../core/util';
+import { nowIso, todayIso, uid } from '../../core/util';
 import { IconComponent } from '../../shared/icon.component';
 
 interface Result { status: 'pass' | 'fail' | 'running'; irn?: string; error?: string; at?: string; }
@@ -89,9 +90,10 @@ const HS_FOR: Record<string, [string, string]> = {
   `],
 })
 export class ScenariosComponent {
-  private store = inject(StoreService);
+  private store = inject(Store);
   private fbr = inject(FbrGatewayService);
   private ui = inject(UiService);
+  private posting = inject(PostingService);
 
   protected activities = ACTIVITIES;
   protected sectors = SECTORS;
@@ -111,7 +113,8 @@ export class ScenariosComponent {
   private persist() { try { localStorage.setItem(this.key(), JSON.stringify(this.results())); } catch { /* ignore */ } }
 
   setProfile(activity: string, sector: string) {
-    const b = this.store.business(); if (b) this.store.updateBusiness({ ...b, activity, sector });
+    const b = this.store.business();
+    if (b) this.store.updateBusiness({ ...b, activity, sector }).catch(e => this.ui.toast(errorMessage(e, 'Could not save the profile'), 'error'));
   }
 
   private sampleInvoice(id: string): Invoice {
@@ -126,7 +129,7 @@ export class ScenariosComponent {
     if (def.usesRetailPrice) line.fixedNotifiedValueOrRetailPrice = 1300;
     line = computeLine(line, buyer, b.furtherTaxRate);
     const at = nowIso();
-    return { id: 'scn_' + id, businessId: b.id, localRef: `TEST-${id}-${Date.now()}`, invoiceType: 'Sale Invoice', invoiceDate: todayIso(), buyer, items: [line],
+    return { id: uid('i_'), businessId: b.id, localRef: `TEST-${id}-${Date.now()}`, invoiceType: 'Sale Invoice', invoiceDate: todayIso(), buyer, items: [line],
       invoiceRefNo: '', scenarioId: id, environment: 'sandbox', status: 'draft', issues: [], attempts: 0, createdAt: at, updatedAt: at, history: [] };
   }
 
@@ -135,6 +138,15 @@ export class ScenariosComponent {
     this.results.update(r => ({ ...r, [id]: { status: 'running' } }));
     const inv = this.sampleInvoice(id);
     try {
+      if (this.store.mode === 'api') {
+        // Through the server queue, like any other invoice; the test invoice stays in the sandbox list.
+        const out = await this.posting.post(await this.store.upsertInvoice(inv));
+        this.results.update(r => ({ ...r, [id]: out.ok
+          ? { status: 'pass', irn: out.invoice.fbrInvoiceNumber, at: nowIso() }
+          : { status: 'fail', error: out.message ?? (out.invoice.issues.map(i => `${i.code} ${i.message}`).join('; ') || 'Not posted'), at: nowIso() } }));
+        this.persist();
+        return;
+      }
       const res = await this.fbr.post({ businessId: b.id, environment: 'sandbox', payload: toPayload(inv, b), idempotencyKey: inv.localRef });
       const issues = issuesFromResponse(res);
       this.results.update(r => ({ ...r, [id]: issues.length || !res.invoiceNumber

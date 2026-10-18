@@ -1,9 +1,10 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
+import { errorMessage } from '../../core/api';
 import { FbrGatewayService } from '../../core/fbr-gateway.service';
 import { PROVINCES } from '../../core/fbr-reference';
 import { Customer } from '../../core/models';
-import { StoreService } from '../../core/store.service';
+import { Store } from '../../core/store';
 import { cleanNtn } from '../../core/tax';
 import { UiService } from '../../core/ui.service';
 import { uid } from '../../core/util';
@@ -69,7 +70,7 @@ import { IconComponent } from '../../shared/icon.component';
   `],
 })
 export class CustomersComponent {
-  protected store = inject(StoreService);
+  protected store = inject(Store);
   private fbr = inject(FbrGatewayService);
   private ui = inject(UiService);
   protected provinces = PROVINCES;
@@ -86,12 +87,17 @@ export class CustomersComponent {
     const b = this.store.business()!;
     this.draft.set(c ? { ...c } : { id: '', businessId: b.id, name: '', ntnCnic: '', province: b.province, address: '', registrationType: 'Registered', activeStatus: 'Unknown' });
   }
-  save(d: Customer) {
-    this.store.upsertCustomer({ ...d, id: d.id || uid('c_'), ntnCnic: cleanNtn(d.ntnCnic) });
-    this.draft.set(null);
-    this.ui.toast('Customer saved');
+  async save(d: Customer) {
+    try {
+      await this.store.upsertCustomer({ ...d, id: d.id || uid('c_'), ntnCnic: cleanNtn(d.ntnCnic) });
+      this.draft.set(null);
+      this.ui.toast('Customer saved');
+    } catch (e) { this.ui.toast(errorMessage(e, 'Could not save the customer'), 'error'); }
   }
-  remove(c: Customer) { if (confirm(`Delete ${c.name}? Existing invoices keep their buyer details.`)) this.store.deleteCustomer(c.id); }
+  remove(c: Customer) {
+    if (!confirm(`Delete ${c.name}? Existing invoices keep their buyer details.`)) return;
+    this.store.deleteCustomer(c.id).catch(e => this.ui.toast(errorMessage(e, 'Could not delete the customer'), 'error'));
+  }
   async check(d: Customer) {
     const t = await this.fbr.registrationType(this.store.business()!.id, cleanNtn(d.ntnCnic));
     if (t !== 'Unknown') { d.registrationType = t; d.activeStatus = 'Active'; this.draft.set({ ...d }); this.ui.toast(`FBR lists this buyer as ${t}`, 'info'); }

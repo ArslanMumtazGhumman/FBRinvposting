@@ -70,6 +70,26 @@ export async function allocateLocalRefs(tx: Tx, businessId: string, count: numbe
   return Array.from({ length: count }, (_, i) => `${r.prefix}${String(r.next - count + i).padStart(5, '0')}`);
 }
 
+/**
+ * The web app shows the next number while the invoice is being typed and sends
+ * it as localRef. Move the counter past any such number in this business's
+ * format, so server-allocated numbers never collide with it.
+ */
+async function keepCounterAhead(tx: Tx, businessId: string, localRefs: string[]) {
+  if (!localRefs.length) return;
+  const [b] = await tx.select({ prefix: businesses.invoicePrefix, next: businesses.nextInvoiceNo }).from(businesses).where(eq(businesses.id, businessId));
+  if (!b) return;
+  let max = 0;
+  for (const ref of localRefs) {
+    const rest = ref.startsWith(b.prefix) ? ref.slice(b.prefix.length) : '';
+    if (/^\d{1,8}$/.test(rest)) max = Math.max(max, Number(rest));
+  }
+  if (max >= b.next) {
+    await tx.update(businesses).set({ nextInvoiceNo: sql`greatest(${businesses.nextInvoiceNo}, ${max + 1})`, updatedAt: new Date() })
+      .where(eq(businesses.id, businessId));
+  }
+}
+
 async function insertLines(tx: Tx, rows: (typeof invoiceItems.$inferInsert)[]) {
   for (let i = 0; i < rows.length; i += LINE_CHUNK) await tx.insert(invoiceItems).values(rows.slice(i, i + LINE_CHUNK));
 }
@@ -112,6 +132,7 @@ export async function insertInvoices(tx: Tx, businessId: string, inputs: Invoice
   const insertedIds = new Set(inserted.map(r => r.id));
   const lines = rows.flatMap((r, i) => (insertedIds.has(r.id) ? lineRows(r.id, businessId, inputs[i]!.items) : []));
   await insertLines(tx, lines);
+  await keepCounterAhead(tx, businessId, rows.filter((r, i) => inputs[i]!.localRef && insertedIds.has(r.id)).map(r => r.localRef));
 
   const linesById = new Map<string, LineRow[]>();
   for (const l of lines) linesById.set(l.invoiceId, [...(linesById.get(l.invoiceId) ?? []), l as LineRow]);

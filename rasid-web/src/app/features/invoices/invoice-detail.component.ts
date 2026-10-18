@@ -2,7 +2,9 @@ import { ChangeDetectionStrategy, Component, computed, effect, inject, input, si
 import { Router, RouterLink } from '@angular/router';
 import QRCode from 'qrcode';
 import { Invoice } from '../../core/models';
-import { StoreService } from '../../core/store.service';
+import { errorMessage } from '../../core/api';
+import { PostingService } from '../../core/posting.service';
+import { Store } from '../../core/store';
 import { invoiceTotals, toPayload } from '../../core/tax';
 import { UiService } from '../../core/ui.service';
 import { formatPkr, nowIso, todayIso, uid } from '../../core/util';
@@ -25,7 +27,9 @@ import { StatusChipComponent } from '../../shared/status-chip.component';
         <button class="btn" (click)="downloadJson()"><app-icon name="download" /> FBR payload</button>
         @if (v.status === 'posted') {
           <button class="btn" (click)="debitNote()">Create debit note</button>
-        } @else {
+        } @else if (v.status === 'outcome_unknown') {
+          <button class="btn" (click)="postAgain()" [disabled]="busy()">{{ busy() ? 'Posting…' : 'Not in IRIS: post again' }}</button>
+        } @else if (v.status === 'draft' || v.status === 'validated' || v.status === 'failed') {
           <a class="btn" [routerLink]="['/invoices', v.id, 'edit']">Edit</a>
         }
         <button class="btn" (click)="duplicate()"><app-icon name="copy" /> Duplicate</button>
@@ -116,7 +120,7 @@ import { StatusChipComponent } from '../../shared/status-chip.component';
       </aside>
     </div>
   </div>
-  } @else {
+  } @else if (store.ready()) {
     <div class="page"><div class="empty"><h3>Invoice not found</h3><a class="btn" routerLink="/invoices">Back to invoices</a></div></div>
   }`,
   styles: [`
@@ -160,7 +164,8 @@ import { StatusChipComponent } from '../../shared/status-chip.component';
   `],
 })
 export class InvoiceDetailComponent {
-  private store = inject(StoreService);
+  protected store = inject(Store);
+  private posting = inject(PostingService);
   private ui = inject(UiService);
   private router = inject(Router);
   readonly id = input.required<string>();
@@ -170,6 +175,7 @@ export class InvoiceDetailComponent {
   protected totals = computed(() => invoiceTotals(this.inv()?.items ?? []));
   protected history = computed(() => [...(this.inv()?.history ?? [])].reverse());
   protected qr = signal<string>('');
+  protected busy = signal(false);
   protected fmt = formatPkr;
   protected when = (iso: string) => new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 
@@ -191,7 +197,7 @@ export class InvoiceDetailComponent {
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `${v.localRef}.json`; a.click(); URL.revokeObjectURL(a.href);
   }
 
-  private clone(v: Invoice, patch: Partial<Invoice>) {
+  private async clone(v: Invoice, patch: Partial<Invoice>) {
     const at = nowIso();
     const copy: Invoice = {
       ...structuredClone(v), id: uid('i_'), localRef: this.store.nextLocalRef(), invoiceDate: todayIso(), status: 'draft',
@@ -199,9 +205,25 @@ export class InvoiceDetailComponent {
       environment: this.biz()!.environment, createdAt: at, updatedAt: at,
       history: [{ at, actor: this.store.user()?.name ?? 'user', action: 'Created', detail: `From ${v.localRef}` }], ...patch,
     };
-    this.store.upsertInvoice(copy);
-    this.router.navigate(['/invoices', copy.id, 'edit']);
+    try {
+      await this.store.upsertInvoice(copy);
+      this.router.navigate(['/invoices', copy.id, 'edit']);
+      return true;
+    } catch (e) { this.ui.toast(errorMessage(e, 'Could not create the copy'), 'error'); return false; }
   }
-  duplicate() { const v = this.inv(); if (v) { this.clone(v, { invoiceType: 'Sale Invoice', invoiceRefNo: '' }); this.ui.toast('Copy created as a draft'); } }
-  debitNote() { const v = this.inv(); if (v) { this.clone(v, { invoiceType: 'Debit Note', invoiceRefNo: v.fbrInvoiceNumber ?? '' }); this.ui.toast('Debit note started against this invoice'); } }
+  async duplicate() { const v = this.inv(); if (v && await this.clone(v, { invoiceType: 'Sale Invoice', invoiceRefNo: '' })) this.ui.toast('Copy created as a draft'); }
+  async debitNote() { const v = this.inv(); if (v && await this.clone(v, { invoiceType: 'Debit Note', invoiceRefNo: v.fbrInvoiceNumber ?? '' })) this.ui.toast('Debit note started against this invoice'); }
+
+  /** FBR timed out on this invoice. Only after a person searched IRIS and did not find it. */
+  async postAgain() {
+    const v = this.inv(); if (!v) return;
+    if (!confirm(`Post ${v.localRef} again?
+
+Only do this if you searched IRIS and this invoice is not there. Otherwise FBR will have it twice.`)) return;
+    this.busy.set(true);
+    try {
+      const r = await this.posting.post(v, { confirmNotInIris: true });
+      this.ui.toast(r.ok ? `Posted. FBR invoice no. ${r.invoice.fbrInvoiceNumber}` : r.message ?? 'FBR rejected the invoice. Edit it to fix the fields.', r.ok ? 'ok' : 'error');
+    } finally { this.busy.set(false); }
+  }
 }

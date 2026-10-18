@@ -37,7 +37,7 @@ const fake = http.createServer((req, res) => {
         return res.end(JSON.stringify({ dated: '2026-10-18 10:00:00', validationResponse: { statusCode: '01', status: 'Invalid', errorCode: null,
           invoiceStatuses: [{ itemSNo: '1', statusCode: '01', status: 'Invalid', errorCode: '0019', error: 'Please provide valid HS Code' }] } }));
       }
-      const irn = `IRN${String(++irnSeq).padStart(6, '0')}`;
+      const irn = name === 'DUPIRN' ? 'IRN-DUP' : `IRN${String(++irnSeq).padStart(6, '0')}`;
       res.end(JSON.stringify({ invoiceNumber: irn, dated: '2026-10-18 10:00:00',
         validationResponse: { statusCode: '00', status: 'Valid', invoiceStatuses: [{ itemSNo: '1', statusCode: '00', status: 'Valid', invoiceNo: `${irn}-1` }] } }));
     }, delay);
@@ -210,6 +210,20 @@ describe('posting queue', () => {
     assert.equal(row.status, 'posted');
     assert.equal(row.fbrInvoiceNumber, 'IRN-EARLIER');
     assert.equal(seen.length, before);
+  });
+
+  test('FBR answering with an invoice number Rasid already has: outcome_unknown, response kept', async () => {
+    const first = await create(a, A, 'DUPIRN');
+    await a.post(inv(A, `/${first.id}/post`));
+    assert.equal((await settled(first.id)).status, 'posted');
+    const second = await create(a, A, 'DUPIRN');
+    await a.post(inv(A, `/${second.id}/post`));
+    const row = await settled(second.id);
+    assert.equal(row.status, 'outcome_unknown');
+    assert.equal(row.issues[0]?.code, 'L-409');
+    const [call] = await tdb.admin.select().from(s.apiCalls).where(eq(s.apiCalls.invoiceId, second.id));
+    assert.equal(call?.outcome, 'ok');
+    assert.equal(call?.fbrInvoiceNumber, 'IRN-DUP');
   });
 
   test('batch: at most 3 FBR calls per business at once, other businesses keep moving, progress over SSE', async () => {

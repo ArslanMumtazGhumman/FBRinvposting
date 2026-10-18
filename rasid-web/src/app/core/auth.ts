@@ -4,7 +4,7 @@ import { CanActivateFn, Router } from '@angular/router';
 import { firstValueFrom } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { User } from './models';
-import { StoreService } from './store.service';
+import { Store } from './store';
 import { sleep } from './util';
 
 /**
@@ -15,11 +15,11 @@ import { sleep } from './util';
 @Injectable({ providedIn: 'root' })
 export class AuthService {
   private http = inject(HttpClient);
-  private store = inject(StoreService);
+  private store = inject(Store);
   private router = inject(Router);
 
   async login(email: string, password: string, otp?: string): Promise<void> {
-    if (environment.mockFbr) {
+    if (!environment.useApi) {
       await sleep(400);
       if (password.length < 8) throw new Error('Password must be at least 8 characters.');
       const name = email.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -31,17 +31,19 @@ export class AuthService {
   }
 
   async logout() {
-    if (!environment.mockFbr) {
+    if (environment.useApi) {
       try { await firstValueFrom(this.http.post(`${environment.apiBaseUrl}/auth/logout`, {})); } catch { /* ignore */ }
     }
-    this.store.user.set(null);
+    this.store.clear();
     this.router.navigateByUrl('/login');
   }
 }
 
-export const authGuard: CanActivateFn = () => {
-  const store = inject(StoreService);
-  return store.user() ? true : inject(Router).parseUrl('/login');
+/** With the API, a page reload asks the server whether the session cookie is still valid. */
+export const authGuard: CanActivateFn = async () => {
+  const store = inject(Store);
+  const router = inject(Router);
+  return (await store.restoreSession()) ? true : router.parseUrl('/login');
 };
 
 /** Sends cookies to the API and echoes the CSRF token on state-changing requests. */

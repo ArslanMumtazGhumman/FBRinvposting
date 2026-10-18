@@ -219,6 +219,7 @@ a { color: var(--accent); }
   &.queued, &.posting { background: var(--warn-soft); color: var(--warn); }
   &.posted { background: var(--accent-soft); color: var(--accent); }
   &.failed { background: var(--danger-soft); color: var(--danger); }
+  &.outcome_unknown { background: var(--warn-soft); color: var(--danger); }
 }
 
 /* ---------- the stamp: the one bold element ---------- */

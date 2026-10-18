@@ -11,6 +11,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: rasid-web/package-lock.json }
       - run: npm ci
+      - run: npx ng test --watch=false
       - run: npx ng build --configuration production
       - run: npm audit --omit=dev --audit-level=high
   api:

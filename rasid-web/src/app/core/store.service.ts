@@ -1,5 +1,6 @@
-import { Injectable, computed, effect, signal } from '@angular/core';
-import { AuditEntry, Business, Customer, ImportMapping, Invoice, LineItem, Product, User } from './models';
+import { Injectable, effect } from '@angular/core';
+import { Business, Customer, ImportMapping, Invoice, Product } from './models';
+import { BulkSaveResult, Store } from './store';
 import { computeLine } from './tax';
 import { nowIso, uid } from './util';
 
@@ -18,32 +19,22 @@ function save(name: string, value: unknown) {
 }
 
 /**
- * Client-side state, signal-based. In the demo build it persists to
- * localStorage. With the backend enabled, the same signals act as a cache
- * that the API services fill — components only ever read signals.
- *
- * Note: FBR tokens are NEVER stored here; Business only carries
- * hasXToken flags and the last-4 hint returned by the API.
+ * Offline demo store (environment.useApi = false): everything persists to
+ * localStorage and a demo business is seeded on first run. Writes always succeed.
  */
-@Injectable({ providedIn: 'root' })
-export class StoreService {
-  readonly user = signal<User | null>(load('user', null));
-  readonly businesses = signal<Business[]>(load('businesses', []));
-  readonly activeBusinessId = signal<string | null>(load('activeBusiness', null));
-  readonly invoices = signal<Invoice[]>(load('invoices', []));
-  readonly customers = signal<Customer[]>(load('customers', []));
-  readonly products = signal<Product[]>(load('products', []));
-  readonly mappings = signal<ImportMapping[]>(load('mappings', []));
-
-  readonly business = computed<Business | null>(() => this.businesses().find(b => b.id === this.activeBusinessId()) ?? this.businesses()[0] ?? null);
-  readonly bizInvoices = computed(() => {
-    const id = this.business()?.id;
-    return this.invoices().filter(i => i.businessId === id).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  });
-  readonly bizCustomers = computed(() => this.customers().filter(c => c.businessId === this.business()?.id));
-  readonly bizProducts = computed(() => this.products().filter(p => p.businessId === this.business()?.id));
+@Injectable()
+export class StoreService extends Store {
+  readonly mode = 'local' as const;
 
   constructor() {
+    super();
+    this.user.set(load('user', null));
+    this.businesses.set(load('businesses', []));
+    this.activeBusinessId.set(load('activeBusiness', null));
+    this.invoices.set(load('invoices', []));
+    this.customers.set(load('customers', []));
+    this.products.set(load('products', []));
+    this.mappings.set(load('mappings', []));
     if (!this.businesses().length) this.seed();
     effect(() => save('user', this.user()));
     effect(() => save('businesses', this.businesses()));
@@ -54,72 +45,49 @@ export class StoreService {
     effect(() => save('mappings', this.mappings()));
   }
 
+  async restoreSession() { return !!this.user(); }
+
   /* ---------- invoices ---------- */
-  upsertInvoice(inv: Invoice) {
+  async upsertInvoice(inv: Invoice) {
     inv = { ...inv, updatedAt: nowIso() };
-    this.invoices.update(list => {
-      const i = list.findIndex(x => x.id === inv.id);
-      if (i === -1) return [inv, ...list];
-      const copy = list.slice(); copy[i] = inv; return copy;
-    });
+    this.cacheInvoice(inv);
     return inv;
   }
-  upsertMany(invs: Invoice[]) {
-    const byId = new Map(invs.map(i => [i.id, { ...i, updatedAt: nowIso() }]));
-    this.invoices.update(list => {
-      const rest = list.filter(i => !byId.has(i.id));
-      return [...byId.values(), ...rest];
-    });
+  async upsertMany(invs: Invoice[], onProgress?: (done: number, total: number) => void): Promise<BulkSaveResult> {
+    const at = nowIso();
+    const byId = new Map(invs.map(i => [i.id, { ...i, updatedAt: at }]));
+    this.invoices.update(list => [...byId.values(), ...list.filter(i => !byId.has(i.id))]);
+    onProgress?.(invs.length, invs.length);
+    return { saved: [...byId.values()], errors: [] };
   }
-  patchInvoice(id: string, patch: Partial<Invoice>, audit?: Omit<AuditEntry, 'at' | 'actor'>) {
-    this.invoices.update(list => list.map(i => i.id !== id ? i : {
-      ...i, ...patch, updatedAt: nowIso(),
-      history: audit ? [...i.history, { at: nowIso(), actor: this.user()?.name ?? 'system', ...audit }] : i.history,
-    }));
-  }
-  deleteInvoice(id: string) { this.invoices.update(l => l.filter(i => i.id !== id)); }
-  invoiceById(id: string) { return this.invoices().find(i => i.id === id); }
+  async deleteInvoice(id: string) { this.invoices.update(l => l.filter(i => i.id !== id)); }
 
-  nextLocalRef(): string {
-    const b = this.business();
-    if (!b) return uid('INV-');
-    const ref = `${b.invoicePrefix}${String(b.nextInvoiceNo).padStart(5, '0')}`;
-    this.updateBusiness({ ...b, nextInvoiceNo: b.nextInvoiceNo + 1 });
-    return ref;
-  }
-
-  /* ---------- masters ---------- */
-  updateBusiness(b: Business) { this.businesses.update(l => l.map(x => x.id === b.id ? b : x)); }
-  addBusiness(b: Business) { this.businesses.update(l => [...l, b]); this.activeBusinessId.set(b.id); }
-  upsertCustomer(c: Customer) {
+  /* ---------- business and masters ---------- */
+  async updateBusiness(b: Business) { this.businesses.update(l => l.map(x => x.id === b.id ? b : x)); return b; }
+  async addBusiness(b: Business) { this.businesses.update(l => [...l, b]); this.activeBusinessId.set(b.id); return b; }
+  async upsertCustomer(c: Customer) {
     this.customers.update(l => l.some(x => x.id === c.id) ? l.map(x => x.id === c.id ? c : x) : [c, ...l]);
+    return c;
   }
-  deleteCustomer(id: string) { this.customers.update(l => l.filter(c => c.id !== id)); }
-  upsertProduct(p: Product) {
+  async deleteCustomer(id: string) { this.customers.update(l => l.filter(c => c.id !== id)); }
+  async upsertProduct(p: Product) {
     this.products.update(l => l.some(x => x.id === p.id) ? l.map(x => x.id === p.id ? p : x) : [p, ...l]);
+    return p;
   }
-  deleteProduct(id: string) { this.products.update(l => l.filter(p => p.id !== id)); }
-  saveMapping(m: ImportMapping) {
+  async deleteProduct(id: string) { this.products.update(l => l.filter(p => p.id !== id)); }
+  async saveMapping(m: ImportMapping) {
     this.mappings.update(l => [m, ...l.filter(x => !(x.businessId === m.businessId && x.signature === m.signature))]);
+    return m;
   }
+  async deleteMapping(id: string) { this.mappings.update(l => l.filter(m => m.id !== id)); }
 
-  /** Remember HS code / UOM / price per product name after an invoice posts. */
-  learnProducts(items: LineItem[]) {
-    const b = this.business(); if (!b) return;
-    const existing = new Map(this.bizProducts().map(p => [p.name.toLowerCase(), p]));
-    items.forEach(it => {
-      if (!it.productDescription || existing.has(it.productDescription.toLowerCase())) return;
-      this.upsertProduct({
-        id: uid('p_'), businessId: b.id, name: it.productDescription, hsCode: it.hsCode,
-        uoM: it.uoM, saleType: it.saleType, rate: it.rate, unitPrice: it.unitPrice,
-      });
-    });
-  }
-
-  resetDemo() {
+  override resetDemo() {
     Object.keys(localStorage).filter(k => k.startsWith(KEY)).forEach(k => localStorage.removeItem(k));
     location.reload();
   }
+
+  /** Sign-out keeps the demo data. */
+  override clear() { this.user.set(null); }
 
   /* ---------- demo seed ---------- */
   private seed() {

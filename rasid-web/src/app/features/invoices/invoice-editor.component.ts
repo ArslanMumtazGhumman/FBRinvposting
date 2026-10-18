@@ -1,11 +1,12 @@
-import { ChangeDetectionStrategy, Component, HostListener, OnInit, computed, inject, input, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, HostListener, computed, effect, inject, input, signal, untracked } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
+import { errorMessage } from '../../core/api';
 import { FbrGatewayService } from '../../core/fbr-gateway.service';
 import { HS_SAMPLE, HS_UOM_RULES, PROVINCES, SALE_TYPES, SCENARIOS, UOMS, saleTypeDef } from '../../core/fbr-reference';
 import { FieldIssue, Invoice, LineItem } from '../../core/models';
 import { PostingService } from '../../core/posting.service';
-import { StoreService } from '../../core/store.service';
+import { Store } from '../../core/store';
 import { cleanNtn, computeLine, emptyLine, invoiceTotals, validateInvoice } from '../../core/tax';
 import { UiService } from '../../core/ui.service';
 import { formatPkr, nowIso, todayIso, uid } from '../../core/util';
@@ -255,8 +256,8 @@ import { StatusChipComponent } from '../../shared/status-chip.component';
     @media (max-width: 700px) { .grid-buyer { grid-template-columns: 1fr; } .span2 { grid-column: auto; } .more-grid { grid-template-columns: 1fr 1fr; } }
   `],
 })
-export class InvoiceEditorComponent implements OnInit {
-  protected store = inject(StoreService);
+export class InvoiceEditorComponent {
+  protected store = inject(Store);
   private posting = inject(PostingService);
   private fbr = inject(FbrGatewayService);
   private ui = inject(UiService);
@@ -289,11 +290,18 @@ export class InvoiceEditorComponent implements OnInit {
   protected autoScenario = computed(() => saleTypeDef(this.inv()?.items[0]?.saleType ?? '')?.scenario ?? 'SN001');
   protected postedRefs = computed(() => this.store.bizInvoices().filter(i => i.fbrInvoiceNumber).slice(0, 50).map(i => i.fbrInvoiceNumber!));
 
-  ngOnInit() {
+  private started = false;
+  constructor() {
+    // With the API, a reload lands here before the business's invoices arrive: wait for them.
+    effect(() => { if (!this.started && this.store.ready()) { this.started = true; untracked(() => this.init()); } });
+  }
+
+  private init() {
     const id = this.id();
     const existing = id ? this.store.invoiceById(id) : undefined;
     if (existing) {
-      if (existing.status === 'posted') { this.router.navigate(['/invoices', existing.id]); return; }
+      // Only invoices FBR has not seen can be edited; the rest open read-only.
+      if (!['draft', 'validated', 'failed'].includes(existing.status)) { this.router.navigate(['/invoices', existing.id]); return; }
       this.isNew = false;
       this.inv.set(structuredClone(existing));
       this.attempted.set(existing.issues.length > 0);
@@ -407,23 +415,28 @@ export class InvoiceEditorComponent implements OnInit {
   }
 
   /* ---------- actions ---------- */
-  private persist(): Invoice {
+  private async persist(): Promise<Invoice> {
     const v = this.inv()!;
-    const saved = this.store.upsertInvoice({ ...v, environment: this.biz()!.environment, scenarioId: v.scenarioId || this.autoScenario() });
+    const saved = await this.store.upsertInvoice({ ...v, environment: this.biz()!.environment, scenarioId: v.scenarioId || this.autoScenario() });
     this.isNew = false;
     return saved;
   }
 
-  saveDraft() {
-    this.persist();
-    this.ui.toast('Draft saved');
+  async saveDraft() {
+    if (this.busy()) return;
+    this.busy.set('save');
+    try {
+      await this.persist();
+      this.ui.toast('Draft saved');
+    } catch (e) { this.ui.toast(errorMessage(e, 'Could not save the draft'), 'error'); }
+    finally { this.busy.set(false); }
   }
 
   async validate() {
     this.attempted.set(true);
     this.busy.set('validate');
     try {
-      const r = await this.posting.validate(this.persist());
+      const r = await this.posting.validate(await this.persist());
       this.inv.set(structuredClone(r));
       this.ui.toast(r.issues.length ? `${r.issues.length} problem(s) to fix` : 'FBR accepted the data. Ready to post.', r.issues.length ? 'error' : 'ok');
     } catch (e) { this.ui.toast((e as Error).message || 'Validation failed', 'error'); }
@@ -435,15 +448,19 @@ export class InvoiceEditorComponent implements OnInit {
     if (this.liveIssues().some(i => i.source === 'local')) { this.ui.toast('Fix the highlighted fields before posting.', 'error'); return; }
     this.busy.set('post');
     try {
-      const r = await this.posting.post(this.persist());
+      const r = await this.posting.post(await this.persist());
       if (r.ok) {
         this.ui.toast(`Posted. FBR invoice no. ${r.invoice.fbrInvoiceNumber}`);
         this.router.navigate(['/invoices', r.invoice.id]);
+      } else if (r.reason === 'unknown') {
+        this.ui.toast('FBR did not answer in time. Check IRIS for this invoice before posting it again.', 'error', 8000);
+        this.router.navigate(['/invoices', r.invoice.id]);
       } else {
         this.inv.set(structuredClone(r.invoice));
-        this.ui.toast(r.reason === 'invalid' ? 'FBR rejected the invoice. See the highlighted fields.' : r.invoice.issues[0]?.message ?? 'Post failed', 'error');
+        this.ui.toast(r.reason === 'invalid' && !r.message ? 'FBR rejected the invoice. See the highlighted fields.' : r.message ?? r.invoice.issues[0]?.message ?? 'Post failed', 'error');
       }
-    } finally { this.busy.set(false); }
+    } catch (e) { this.ui.toast(errorMessage(e, 'Could not save the invoice'), 'error'); }
+    finally { this.busy.set(false); }
   }
 
   @HostListener('document:keydown', ['$event'])

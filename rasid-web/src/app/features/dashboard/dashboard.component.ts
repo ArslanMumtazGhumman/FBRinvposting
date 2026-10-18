@@ -1,6 +1,7 @@
 import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
 import { RouterLink } from '@angular/router';
-import { StoreService } from '../../core/store.service';
+import { InvoiceStatus } from '../../core/models';
+import { Store } from '../../core/store';
 import { invoiceTotals } from '../../core/tax';
 import { formatPkr } from '../../core/util';
 import { IconComponent } from '../../shared/icon.component';
@@ -152,7 +153,7 @@ interface MonthBar { key: string; label: string; tax: number; count: number; }
   `],
 })
 export class DashboardComponent {
-  protected store = inject(StoreService);
+  protected store = inject(Store);
   protected fmt = formatPkr;
   protected totals = (i: { items: Parameters<typeof invoiceTotals>[0] }) => invoiceTotals(i.items);
   protected hover = signal(-1);
@@ -162,9 +163,10 @@ export class DashboardComponent {
   protected greeting = computed(() => { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; });
 
   protected counts = computed(() => {
-    const c = { draft: 0, validated: 0, queued: 0, posting: 0, posted: 0, failed: 0 };
+    const c: Record<InvoiceStatus, number> = { draft: 0, validated: 0, queued: 0, posting: 0, posted: 0, failed: 0, outcome_unknown: 0 };
     this.store.bizInvoices().forEach(i => c[i.status]++);
-    return c;
+    // "Rejected" includes posts whose outcome is unknown: both need a person.
+    return { ...c, failed: c.failed + c.outcome_unknown };
   });
 
   protected month = computed(() => {
@@ -174,7 +176,7 @@ export class DashboardComponent {
     return { posted: posted.length, salesTax: t.salesTax + t.furtherTax, value: t.value };
   });
 
-  protected attention = computed(() => this.store.bizInvoices().filter(i => i.status === 'failed').slice(0, 5));
+  protected attention = computed(() => this.store.bizInvoices().filter(i => i.status === 'failed' || i.status === 'outcome_unknown').slice(0, 5));
   protected recent = computed(() => this.store.bizInvoices().filter(i => i.status === 'posted').slice(0, 6));
 
   protected bars = computed<MonthBar[]>(() => {

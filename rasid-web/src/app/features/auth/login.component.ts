@@ -77,7 +77,7 @@ import { environment } from '../../../environments/environment';
 export class LoginComponent {
   private auth = inject(AuthService);
   private router = inject(Router);
-  protected demo = environment.mockFbr;
+  protected demo = !environment.useApi;
   protected email = '';
   protected password = '';
   protected otp = '';

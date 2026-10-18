@@ -2,7 +2,7 @@ import { ChangeDetectionStrategy, Component, computed, input } from '@angular/co
 import { InvoiceStatus } from '../core/models';
 
 const LABELS: Record<InvoiceStatus, string> = {
-  draft: 'Draft', validated: 'Validated', queued: 'Queued', posting: 'Posting', posted: 'Posted', failed: 'Rejected',
+  draft: 'Draft', validated: 'Validated', queued: 'Queued', posting: 'Posting', posted: 'Posted', failed: 'Rejected', outcome_unknown: 'Check IRIS',
 };
 
 @Component({

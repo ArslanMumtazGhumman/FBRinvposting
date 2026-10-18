@@ -253,3 +253,47 @@ describe('access', () => {
   });
 });
 
+
+describe('businesses', () => {
+  const profile = (over: Record<string, unknown> = {}) => ({
+    name: 'Second Co', ntnCnic: '7654321', province: 'Sindh', address: 'Karachi', activity: 'Wholesaler', sector: 'FMCG',
+    environment: 'sandbox', defaultSaleType: 'Goods at standard rate (default)', furtherTaxRate: 4, invoicePrefix: 'SEC-', nextInvoiceNo: 1, ...over,
+  });
+
+  test('an owner adds a business and becomes its owner; others cannot see it', async () => {
+    const r = await a.post('/businesses', profile({ id: 'b_alpha_second' }));
+    assert.equal(r.status, 201, r.text);
+    assert.equal(r.body.id, 'b_alpha_second');
+    assert.equal(r.body.hasSandboxToken, false);
+    const mine = (await a.get('/businesses')).body.map((x: { id: string }) => x.id);
+    assert.ok(mine.includes('b_alpha_second'));
+    assert.ok(!(await b.get('/businesses')).body.some((x: { id: string }) => x.id === 'b_alpha_second'));
+    assert.equal((await a.post(inv({ businessId: 'b_alpha_second' }), invoiceBody())).body.localRef, 'SEC-00001');
+    assert.equal((await a.post('/businesses', profile({ id: 'b_alpha_second' }))).status, 409);
+    assert.equal((await a.post('/businesses', profile({ ntnCnic: '12' }))).status, 400);
+  });
+
+  test('only owners update; switching environment is audited', async () => {
+    const r = await a.put(`/businesses/${A.businessId}`, profile({ name: 'Alpha Renamed', invoicePrefix: 'ANT-', nextInvoiceNo: 500, environment: 'production' }));
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.body.name, 'Alpha Renamed');
+    assert.equal(r.body.environment, 'production');
+    const [row] = await tdb.admin.select().from(s.auditLog).where(eq(s.auditLog.action, 'environment_production'));
+    assert.equal(row?.businessId, A.businessId);
+    assert.equal((await b.put(`/businesses/${A.businessId}`, profile())).status, 404);
+    const V = await createTenant(tdb, 'acct', { role: 'accountant' });
+    await tdb.admin.insert(s.memberships).values({ userId: V.userId, businessId: A.businessId, role: 'accountant' });
+    const acct = await signIn(app.base, V);
+    assert.equal((await acct.put(`/businesses/${A.businessId}`, profile())).status, 403);
+    assert.equal((await acct.post('/businesses', profile())).status, 403);
+    await a.put(`/businesses/${A.businessId}`, profile({ name: 'Alpha', invoicePrefix: 'ANT-', nextInvoiceNo: 500 }));
+  });
+
+  test('numbers the browser assigned move the counter past them', async () => {
+    assert.equal((await a.post(inv(A), invoiceBody({ localRef: 'ANT-00510' }))).status, 201);
+    assert.equal((await a.post(inv(A), invoiceBody({ localRef: 'OTHER-99999' }))).status, 201);
+    assert.equal((await a.post(inv(A), invoiceBody())).body.localRef, 'ANT-00511');
+    const biz = (await a.get('/businesses')).body.find((x: { id: string }) => x.id === A.businessId);
+    assert.equal(biz.nextInvoiceNo, 512);
+  });
+});
