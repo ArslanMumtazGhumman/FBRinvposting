@@ -1,5 +1,5 @@
 import cookieParser from 'cookie-parser';
-import express, { type NextFunction, type Request, type Response } from 'express';
+import express, { type NextFunction, type Request, type Response, type Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { config } from './config.js';
@@ -13,6 +13,19 @@ import { importMappingRoutes } from './routes/import-mappings.js';
 import { invoiceRoutes } from './routes/invoices.js';
 import { postingRoutes } from './routes/posting.js';
 import { productRoutes } from './routes/products.js';
+
+/** Every API router and where it is mounted (also read by the tests to enumerate all endpoints). */
+export const ROUTERS: [string, Router][] = [
+  ['/api/auth', authRoutes],
+  ['/api/businesses', businessRoutes],
+  ['/api/businesses/:businessId/credentials', credentialRoutes],
+  ['/api/businesses/:businessId/invoices', postingRoutes],
+  ['/api/businesses/:businessId/invoices', invoiceRoutes],
+  ['/api/businesses/:businessId/customers', customerRoutes],
+  ['/api/businesses/:businessId/products', productRoutes],
+  ['/api/businesses/:businessId/import-mappings', importMappingRoutes],
+  ['/api/fbr/:businessId', fbrRoutes],
+];
 
 /** The Express app without a listener (server.ts listens; tests mount it on an ephemeral port). */
 export function createApp() {
@@ -45,15 +58,7 @@ export function createApp() {
   app.use('/api/auth/login', rateLimit({ windowMs: 15 * 60_000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false }));
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
-  app.use('/api/auth', authRoutes);
-  app.use('/api/businesses', businessRoutes);
-  app.use('/api/businesses/:businessId/credentials', credentialRoutes);
-  app.use('/api/businesses/:businessId/invoices', postingRoutes);
-  app.use('/api/businesses/:businessId/invoices', invoiceRoutes);
-  app.use('/api/businesses/:businessId/customers', customerRoutes);
-  app.use('/api/businesses/:businessId/products', productRoutes);
-  app.use('/api/businesses/:businessId/import-mappings', importMappingRoutes);
-  app.use('/api/fbr/:businessId', fbrRoutes);
+  for (const [path, router] of ROUTERS) app.use(path, router);
 
   app.use((_req: Request, res: Response) => res.status(404).json({ message: 'Not found' }));
   // Never leak stack traces or SQL; log a redacted line.

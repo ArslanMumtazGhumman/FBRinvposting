@@ -214,3 +214,29 @@ Choices made where the brief left room. Simpler option first; revisit if it hurt
   `onload` handler that critical-CSS inlining adds to the stylesheet link. Turning inlining off is simpler than
   loosening `script-src`. Cost: the stylesheet loads normally instead of after first paint, a small
   difference for an app behind a login.
+
+### Step 7: Tests
+- **The sample sheet and the worker's parsing moved out of UI code** into `core/import/sample-sheet.ts` and
+  `core/import/parse-sheet.ts`. The tests run the same path a real upload takes (rows → .xlsx bytes →
+  `parseSheet` → `suggestMapping` → `buildInvoices` → `validateInvoice`). They assert that the sample's three
+  deliberate mistakes, and only those, are caught.
+- **Web tests use the existing `ng test` (Vitest, jsdom) runner**, not a separate Vitest config.
+- **"Every endpoint" is enumerated, not listed by hand.** `app.ts` mounts routers from an exported `ROUTERS`
+  list. `security.test.ts` derives every `METHOD /path` from it and fails if a route has no case, so a new
+  endpoint must be added to the token sweep and the isolation matrix.
+- **Tenant isolation is checked as "B is byte-for-byte unchanged".** Every business-scoped route is called with
+  B's business id, and every `:id` route with B's record ids under A's business. Each must return 404 (upserts
+  that reuse B's ids return 409). A snapshot of all of B's rows must match afterwards, and B's token must never reach FBR.
+- **Bug found and fixed: duplicate jobs for one invoice.**
+  - What went wrong: a second job that found the invoice in `posting` assumed a crash and marked it `outcome_unknown` while the first job's post was still in flight. The UI would then invite "post again", a real duplicate risk.
+  - How it can happen: duplicate jobs arise when ioredis resends a queue add whose reply was lost.
+  - The fix (`queue/inflight.ts`): the job claims a Redis marker with its job id inside the row-locked transaction, before `posting` commits. A different job that finds `posting` with a live marker leaves the invoice alone. The same job id (BullMQ's re-run after a crash) or no marker still means `outcome_unknown`.
+  - The marker is released only after the outcome is stored. The compose SIGKILL test still passes.
+- **A payload contract test** (`test/contract.test.ts`) reads `FbrItem` and `FbrInvoicePayload` from
+  `rasid-web/src/app/core/models.ts`. It fails if the API's zod schema or the worker's payload builder drifts from those names.
+- **One timing assertion relaxed.** The posting test's "exactly 3 in flight" became "at most 3, and at least 2". On a
+  loaded machine, three jobs don't always overlap within one fake FBR call; the guarantee is the upper bound.
+- **Not changed: `xlsx` 0.18.5 has npm audit advisories (prototype pollution, ReDoS) with no npm fix.** SheetJS
+  publishes fixed versions (0.20.x) only from cdn.sheetjs.com, so `npm audit --omit=dev --audit-level=high`
+  in CI fails. This predates milestone 1. The fix is to depend on the SheetJS tarball URL. That changes where a dependency comes
+  from, so it is left for a decision. The parser runs only in the user's browser, in a Web Worker, on files they chose.

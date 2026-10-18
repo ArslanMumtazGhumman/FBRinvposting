@@ -10,7 +10,7 @@ import * as s from '../../src/db/schema.js';
 import { createApp } from '../../src/app.js';
 import { hashPassword } from '../../src/lib/auth.js';
 
-export interface Res<T = any> { status: number; body: T; text: string }
+export interface Res<T = any> { status: number; body: T; text: string; headers: Headers }
 
 export class Client {
   private cookies = new Map<string, string>();
@@ -35,7 +35,7 @@ export class Client {
     const text = await r.text();
     let parsed: unknown = null;
     try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
-    return { status: r.status, body: parsed as T, text };
+    return { status: r.status, body: parsed as T, text, headers: r.headers };
   }
   /** Reads a Server-Sent Events stream until it closes (or timeoutMs passes). */
   async events(path: string, timeoutMs = 20_000): Promise<{ status: number; events: { event: string; data: any }[] }> {

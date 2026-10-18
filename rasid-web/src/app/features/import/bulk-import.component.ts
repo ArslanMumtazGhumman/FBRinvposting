@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { RouterLink } from '@angular/router';
 import { errorMessage } from '../../core/api';
 import { FbrGatewayService } from '../../core/fbr-gateway.service';
+import { sampleSheet } from '../../core/import/sample-sheet';
 import { TARGET_FIELDS, buildInvoices, headerSignature, suggestMapping } from '../../core/import/smart-mapper';
 import { FieldIssue, Invoice, LineItem } from '../../core/models';
 import { PostingService, issuesFromResponse } from '../../core/posting.service';
@@ -550,26 +551,10 @@ export class BulkImportComponent implements OnDestroy {
     XLSX.writeFile(wb, 'rasid-fbr-import-template.xlsx');
   }
 
-  /** Messy, realistic sheet: different headers, DD/MM/YYYY dates, a few deliberate errors. */
+  /** Messy, realistic sheet: different headers, DD/MM/YYYY dates, a few deliberate errors (see sample-sheet.ts). */
   async loadSample() {
     const XLSX = await import('xlsx');
-    const buyers = [
-      ['Metro Cash & Carry', '4410235', 'Punjab'], ['Imtiaz Super Market', '3820114', 'Sindh'], ['Hamid & Sons', '5129903', 'Punjab'],
-      ['Usman Kiryana', '35202-1234567-1', 'Punjab'], ['Peshawar Wholesale Mart', '2287741', 'KPK'],
-    ];
-    const items = [['Refined sugar 50kg', '17019910', 'KGS', 155], ['Basmati rice 25kg', '1006.3090', 'kg', 340], ['Polythene bags', '3923.2100', 'KG', 410], ['Beauty soap carton', '3401.1100', 'pcs', 6200]];
-    const rows: unknown[][] = [['Bill #', 'Bill Date', 'Party Name', 'NTN', 'Province', 'City', 'PCT Code', 'Item Name', 'Unit', 'Qty', 'Rate/Unit', 'GST %', 'GST Amount']];
-    for (let n = 0; n < 60; n++) {
-      const b = buyers[n % buyers.length]; const it = items[n % 3];
-      const qty = 20 + (n * 13) % 180; const val = qty * (it[3] as number);
-      const bill = `SB-${2400 + Math.floor(n / 2)}`;
-      let tax: number | string = Math.round(val * 0.18 * 100) / 100;
-      let hs = it[1];
-      if (n === 7) hs = '1701';                 // short HS code → 0019
-      if (n === 15) tax = Math.round(val * 0.17); // wrong tax → 0104
-      rows.push([bill, `${String(1 + (n % 27)).padStart(2, '0')}/10/2026`, b[0], b[1], b[2], b[2] === 'Sindh' ? 'Karachi' : 'Lahore', hs, it[0], it[2], qty, it[3], '18%', tax]);
-    }
-    rows.push(['SB-2430', '30/10/2026', '', '4410235', 'Punjab', 'Lahore', '1701.9910', 'Refined sugar 50kg', 'KG', 10, 155, '18%', 279]); // missing buyer → 0010
+    const rows = sampleSheet();
     const ws = XLSX.utils.aoa_to_sheet(rows);
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'October sales');
     const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer;

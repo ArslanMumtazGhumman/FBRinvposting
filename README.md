@@ -53,6 +53,13 @@ in Postgres and posting runs on the server queue. To develop the web app against
 `useApi: true` in `environment.development.ts` (API on `http://localhost:3000/api`, `CORS_ORIGINS=http://localhost:4200`).
 Then in the app: Settings → FBR connection → paste the sandbox token from IRIS → Sandbox scenarios → Run all.
 
+## Tests
+
+| Where | Command | What |
+| --- | --- | --- |
+| `rasid-web` | `npx ng test --watch=false` | Vitest: `tax.ts` (rates, line maths, FBR rule checks, payload), `smart-mapper.ts` on the sample sheet (header matching, DD/MM/YYYY dates, NTN cleanup, row grouping), `ApiStoreService`, `PostingService` |
+| `rasid-api` | `npm test` | node:test against Postgres 16 and Redis 7 in Testcontainers (needs Docker): RLS and audit chain, every endpoint, the posting queue, and `security.test.ts` (no endpoint returns a token, tenant isolation on every route, idempotent posting) |
+
 ## API development
 
 ```bash

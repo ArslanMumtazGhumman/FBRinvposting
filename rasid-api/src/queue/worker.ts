@@ -10,7 +10,8 @@
  *   person checks IRIS before posting it again.
  * - The invoice moves to `posting` before FBR is called. A job that finds it
  *   already in `posting` (worker crashed, or a write failed after the call)
- *   marks it outcome_unknown instead of posting twice.
+ *   marks it outcome_unknown instead of posting twice, unless another live
+ *   job holds it (inflight.ts), in which case that job records the result.
  */
 import { DelayedError, Worker, type Job } from 'bullmq';
 import { and, eq, inArray } from 'drizzle-orm';
@@ -28,6 +29,7 @@ import { FbrInvoicePayload } from '../schemas/invoice.js';
 import type { FbrEnv } from '../types/models.js';
 import { POST_QUEUE, type PostJob } from './posting.js';
 import { redisConnection } from './redis.js';
+import { InflightPosts } from './inflight.js';
 import { BusinessSlots } from './slots.js';
 
 const UNKNOWN_HINT = 'FBR may have recorded this invoice. Search for it in IRIS before posting again, to avoid a duplicate.';
@@ -43,12 +45,18 @@ async function settle(tx: Tx, id: string, from: InvoiceStatus[],
     .where(and(eq(invoices.id, id), inArray(invoices.status, from)));
 }
 
-async function prepare(job: PostJob): Promise<Prepared> {
+/** The running BullMQ job and the in-flight registry (absent when called outside the worker). */
+export interface RunContext { jobId: string; inflight: InflightPosts }
+
+async function prepare(job: PostJob, run?: RunContext): Promise<Prepared> {
   const { businessId, invoiceId, actor } = job;
   return withBusiness(actor, businessId, async tx => {
     const [row] = await tx.select().from(invoices).where(eq(invoices.id, invoiceId)).for('update');
     if (!row) return { kind: 'settled' }; // deleted, or the user lost access to the business
     if (row.status === 'posting') {
+      // Another job is posting it right now (a duplicate job on the queue): it will record the result.
+      const holder = run ? await run.inflight.holder(invoiceId) : null;
+      if (holder && holder !== run!.jobId) return { kind: 'settled' };
       await settle(tx, invoiceId, ['posting'], {
         status: 'outcome_unknown',
         issues: [{ code: 'L-504', message: 'Posting was interrupted after the invoice was sent to FBR.', hint: UNKNOWN_HINT, source: 'fbr' }],
@@ -91,6 +99,8 @@ async function prepare(job: PostJob): Promise<Prepared> {
       return { kind: 'settled' };
     }
 
+    // Claimed before this transaction commits, so a job that next sees `posting` also sees who holds it.
+    if (run) await run.inflight.claim(invoiceId, run.jobId);
     await settle(tx, invoiceId, ['queued'], { status: 'posting', issues: [] }, { actor: job.actorName, action: 'Posting to FBR' });
     return { kind: 'post', token, env, payload: parsed.data, localRef: row.localRef };
   });
@@ -164,16 +174,20 @@ async function record(job: PostJob, p: Extract<Prepared, { kind: 'post' }>, resu
 }
 
 /** One invoice: prepare (DB), call FBR (no transaction open), record the outcome (DB). */
-export async function postInvoice(job: PostJob): Promise<void> {
-  const p = await prepare(job);
+export async function postInvoice(job: PostJob, run?: RunContext): Promise<void> {
+  const p = await prepare(job, run);
   if (p.kind !== 'post') return;
   let result: { r: FbrResult } | { e: unknown };
   try { result = { r: await fbr.post(p.token, p.env, p.payload) }; } catch (e) { result = { e }; }
   await record(job, p, result);
+  // Only once the outcome is stored; if recording failed, the marker tells this job's re-run it was the poster.
+  await run?.inflight.release(job.invoiceId, run.jobId);
 }
 
 /** A job that ran out of attempts: never leave its invoice stuck in queued/posting. */
-async function abandon(job: PostJob, err: Error) {
+async function abandon(job: PostJob, err: Error, run: RunContext) {
+  const holder = await run.inflight.holder(job.invoiceId);
+  if (holder && holder !== run.jobId) return; // another live job is posting it
   await withBusiness(job.actor, job.businessId, async tx => {
     const [row] = await tx.select({ status: invoices.status }).from(invoices).where(eq(invoices.id, job.invoiceId)).for('update');
     if (row?.status === 'queued') {
@@ -196,7 +210,9 @@ export interface PostWorkerOptions { concurrency?: number; perBusiness?: number 
 export function startPostWorker(opts: PostWorkerOptions = {}) {
   const slotRedis = redisConnection();
   // Longer than the worst case for one post: 4 attempts at the timeout plus 15 s of backoff.
-  const slots = new BusinessSlots(slotRedis, opts.perBusiness ?? config.postConcurrencyPerBusiness, 4 * config.fbrTimeoutMs + 60_000);
+  const leaseMs = 4 * config.fbrTimeoutMs + 60_000;
+  const slots = new BusinessSlots(slotRedis, opts.perBusiness ?? config.postConcurrencyPerBusiness, leaseMs);
+  const inflight = new InflightPosts(slotRedis, leaseMs);
 
   const workerRedis = redisConnection({ maxRetriesPerRequest: null });
   const worker = new Worker<PostJob>(POST_QUEUE, async (job: Job<PostJob>, token?: string) => {
@@ -206,7 +222,7 @@ export function startPostWorker(opts: PostWorkerOptions = {}) {
       await job.moveToDelayed(Date.now() + 300 + Math.floor(Math.random() * 700), token);
       throw new DelayedError();
     }
-    try { await postInvoice(job.data); }
+    try { await postInvoice(job.data, { jobId: holder, inflight }); }
     finally { await slots.release(job.data.businessId, holder); }
   }, {
     connection: workerRedis,
@@ -217,7 +233,7 @@ export function startPostWorker(opts: PostWorkerOptions = {}) {
     if (!job) return;
     log({ event: 'post_job_failed', jobId: job.id, invoiceId: job.data.invoiceId, attempt: job.attemptsMade, error: redact(err.message) });
     if (job.attemptsMade >= (job.opts.attempts ?? 1)) {
-      abandon(job.data, err).catch(e => log({ event: 'post_abandon_failed', invoiceId: job.data.invoiceId, error: redact(String(e)) }));
+      abandon(job.data, err, { jobId: String(job.id), inflight }).catch(e => log({ event: 'post_abandon_failed', invoiceId: job.data.invoiceId, error: redact(String(e)) }));
     }
   });
   worker.on('error', err => log({ event: 'worker_error', error: redact(err.message) }));
