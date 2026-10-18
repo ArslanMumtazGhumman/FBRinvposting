@@ -1,21 +1,16 @@
 /**
- * FBR gateway: validate, post, reference lists and buyer checks.
- * Idempotency: a successful post is recorded in api_calls under
- * (businessId, env, Idempotency-Key); repeating the same key returns the
- * stored response instead of posting twice.
- *
- * No transaction is held open across an FBR call: context is read in one
- * withBusiness() transaction and the outcome is written in another.
+ * FBR gateway: validate, reference lists and buyer checks, called during the
+ * request. Posting goes through the queue (routes/posting.ts, queue/worker.ts).
+ * No transaction is held open across an FBR call.
  */
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { Router, type Request, type Response } from 'express';
 import { requireAuth, requireBusiness, requireRole } from '../lib/auth.js';
-import { audit, hashPayload } from '../lib/audit.js';
 import { fbr, FbrHttpError, type FbrJson } from '../lib/fbr-client.js';
 import { parse } from '../lib/http.js';
 import { FbrCallBody, RegTypeBody } from '../schemas/auth.js';
 import { withBusiness } from '../db/client.js';
-import { apiCalls, businesses } from '../db/schema.js';
+import { businesses } from '../db/schema.js';
 import type { FbrEnv } from '../types/models.js';
 import { loadToken } from './credentials.js';
 
@@ -25,7 +20,6 @@ type KindParams = Params & { kind: string };
 
 export const fbrRoutes = Router({ mergeParams: true });
 
-const inflight = new Set<string>();
 const statusOf = (e: unknown) => (e instanceof FbrHttpError ? e.status : undefined);
 const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -58,53 +52,6 @@ fbrRoutes.post<Params>('/validate', requireAuth, requireBusiness, requireRole('o
     const r = await fbr.validate(ctx.token, ctx.env, payload);
     res.json(r.json);
   } catch (e) { res.status(statusOf(e) === 401 ? 401 : 503).json({ message: messageOf(e) }); }
-});
-
-fbrRoutes.post<Params>('/post', requireAuth, requireBusiness, requireRole('owner', 'accountant'), async (req, res) => {
-  const ctx = await context(req, res); if (!ctx) return;
-  const { businessId } = req.params;
-  const actor = req.user.id;
-  const key = String(req.get('Idempotency-Key') ?? '').slice(0, 120);
-  if (!key) return res.status(400).json({ message: 'Idempotency-Key header is required.' });
-  const body = parse(FbrCallBody, req.body, res); if (!body) return;
-  const { payload } = body;
-  if (ctx.sellerNtn !== payload.sellerNTNCNIC) return res.status(403).json({ message: 'Seller NTN does not match this business.' });
-
-  const [done] = await withBusiness(actor, businessId, tx => tx.select({ response: apiCalls.response }).from(apiCalls)
-    .where(and(eq(apiCalls.businessId, businessId), eq(apiCalls.env, ctx.env), eq(apiCalls.idempotencyKey, key),
-      eq(apiCalls.endpoint, 'post'), eq(apiCalls.outcome, 'ok'))));
-  if (done) return res.json(done.response);
-  // Single-process guard; step 4 moves posting to a queue with a database lock.
-  const lock = `${businessId}:${ctx.env}:${key}`;
-  if (inflight.has(lock)) return res.status(409).json({ message: 'This invoice is already being posted.' });
-  inflight.add(lock);
-
-  const payloadHash = hashPayload(payload);
-  try {
-    const r = await fbr.post(ctx.token, ctx.env, payload);
-    const irn: string | undefined = r.json?.invoiceNumber || undefined;
-    const errorCode: string | undefined = r.json?.validationResponse?.errorCode ?? undefined;
-    await withBusiness(actor, businessId, async tx => {
-      await tx.insert(apiCalls).values({
-        businessId, env: ctx.env, endpoint: 'post', idempotencyKey: key, outcome: irn ? 'ok' : 'rejected', httpStatus: 200,
-        fbrInvoiceNumber: irn, errorCode, response: r.json, payloadHash, attempts: r.attempt, latencyMs: r.latencyMs, actor,
-      }).onConflictDoNothing();
-      await audit({ actor, action: irn ? 'fbr_posted' : 'fbr_rejected', businessId, detail: irn ?? errorCode, payloadHash, attempts: r.attempt, latencyMs: r.latencyMs, env: ctx.env }, tx);
-    });
-    res.json(r.json);
-  } catch (e) {
-    const status = statusOf(e);
-    const attempts = (e as FbrHttpError).attempts ?? 1;
-    await withBusiness(actor, businessId, async tx => {
-      await tx.insert(apiCalls).values({
-        businessId, env: ctx.env, endpoint: 'post', idempotencyKey: key, outcome: status === -1 ? 'timeout' : 'error',
-        httpStatus: status !== undefined && status > 0 ? status : null, errorMessage: messageOf(e), payloadHash, attempts, actor,
-      });
-      await audit({ actor, action: 'fbr_error', businessId, detail: messageOf(e), payloadHash, attempts, env: ctx.env }, tx);
-    });
-    if (status === -1) return res.status(504).json({ code: 'OUTCOME_UNKNOWN', message: 'FBR timed out. Check IRIS for this invoice before posting it again.' });
-    res.status(status === 401 ? 401 : 503).json({ message: messageOf(e) });
-  } finally { inflight.delete(lock); }
 });
 
 const REF_CACHE = new Map<string, { at: number; json: FbrJson }>(); // kind+query -> { at, json }

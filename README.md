@@ -28,7 +28,7 @@ Sign in with any email and an 8+ character password. Sample business, customers,
 
 ```bash
 cd rasid-api
-cp .env.example .env     # fill VAULT_KEY_V1, SESSION_SECRET and the two database URLs (see the file)
+cp .env.example .env     # fill VAULT_KEY_V1, SESSION_SECRET, the two database URLs and REDIS_URL (see the file)
 npm install
 npx tsx --env-file=.env src/db/migrate.ts   # as the table owner; also creates the API login role
 npx tsx --env-file=.env src/seed.ts owner@company.pk "Owner Name" "a-strong-password" 1234567 "Company (Pvt) Ltd"
@@ -43,9 +43,10 @@ Then in the app: Settings → FBR connection → paste the sandbox token from IR
 
 ```bash
 cd rasid-api
-npm run dev         # tsx watch, no build step
+npm run dev         # API: tsx watch, no build step
+npm run dev:worker  # posting worker (needs Redis): tsx watch
 npm run typecheck   # tsc --noEmit
-npm test            # node:test via tsx; starts Postgres 16 with Testcontainers (needs Docker)
+npm test            # node:test via tsx; starts Postgres 16 and Redis 7 with Testcontainers (needs Docker)
 npm run db:generate # after editing src/db/schema.ts: writes a new drizzle/ migration
 npm run build       # tsc -> dist/ (what the Docker image runs)
 ```
@@ -67,7 +68,15 @@ header on writes. Every body is validated with zod (`rasid-api/src/schemas`); a 
 | `GET/POST /customers`, `GET/PUT/DELETE /customers/:id` | `PUT` creates or replaces (the web app makes ids) |
 | `GET/POST /products`, `GET/PUT/DELETE /products/:id` | as customers |
 | `GET/POST /import-mappings`, `DELETE /import-mappings/:id` | `POST` replaces the mapping with the same header signature |
+| `POST /invoices/:id/post` | Queues one invoice for FBR → 202 `{ batchId, invoice }`. 409 if already queued/posted. An `outcome_unknown` invoice needs `{ "confirmNotInIris": true }` |
+| `POST /invoices/post-batch` | `{ ids }` (≤5000) → 202 `{ batchId, queued, skipped: [{ id, status, message }] }` |
+| `GET /invoices/batches/:batchId` | Progress: `{ total, queued, posting, posted, failed, outcomeUnknown, done, running }` |
+| `GET /invoices/batches/:batchId/events` | Same progress as Server-Sent Events: `progress`, `invoice` (status, IRN, issues), then `done` |
 | `PUT /credentials/:env`, `POST /credentials/:env/test` | Tokens are write-only |
+
+FBR lookups stay synchronous under `/api/fbr/:businessId`: `POST /validate`, `GET /reference/:kind`,
+`POST /reg-type`. Posting happens only in the worker (`node dist/worker.js`): at most 3 FBR calls in
+flight per business, a timed-out post becomes `outcome_unknown` and is never retried automatically.
 
 ## What is where
 
@@ -78,12 +87,16 @@ header on writes. Every body is validated with zod (`rasid-api/src/schemas`); a 
 | Reference data, sale types, 28 scenarios, activity×sector matrix, error help | `rasid-web/src/app/core/fbr-reference.ts` |
 | Smart column matching (synonyms + content sniffing), date/UOM/province normalising, row grouping | `rasid-web/src/app/core/import/smart-mapper.ts` |
 | Excel parsing off the main thread | `rasid-web/src/app/core/import/excel.worker.ts` |
-| Validate → post orchestration, bounded-concurrency queue, retries | `rasid-web/src/app/core/posting.service.ts` |
+| Validate → post orchestration (offline demo: in-browser queue) | `rasid-web/src/app/core/posting.service.ts` |
 | FBR simulator / HTTP gateway switch | `rasid-web/src/app/core/fbr-gateway.service.ts` |
 | Token vault (AES-256-GCM, key versions, AAD = business) | `rasid-api/src/lib/vault.ts` |
 | Login, scrypt, TOTP, lockout, cookie session, CSRF | `rasid-api/src/lib/auth.ts` |
 | PRAL client (sandbox `_sb` routing, timeouts, safe retry) | `rasid-api/src/lib/fbr-client.ts` |
-| Idempotent posting, reference cache, seller-NTN guard | `rasid-api/src/routes/fbr.ts` |
+| FBR validate, reference cache, seller-NTN guard | `rasid-api/src/routes/fbr.ts` |
+| Queue for posting, batch progress (SSE) | `rasid-api/src/routes/posting.ts`, `rasid-api/src/repos/posting.ts` |
+| Posting worker (BullMQ): idempotency, outcome-unknown handling | `rasid-api/src/queue/worker.ts` |
+| 3-per-business FBR concurrency across workers | `rasid-api/src/queue/slots.ts` |
+| Server-side FBR payload builder (twin of `toPayload`) | `rasid-api/src/lib/fbr-payload.ts` |
 | Request validation (zod) | `rasid-api/src/schemas/*.ts` |
 | Hash-chained audit log | `rasid-api/src/lib/audit.ts` |
 | Database schema | `rasid-api/src/db/schema.ts` |
@@ -93,7 +106,6 @@ header on writes. Every body is validated with zod (`rasid-api/src/schemas`); a 
 
 ## Before going live
 
-- **Posting queue:** posting still runs inside the API request; move it into BullMQ workers on Redis.
 - **Invoices:** the web app keeps invoices in the browser (localStorage) in this version. Add
   `/api/invoices` CRUD backed by Postgres before onboarding real customers, so records survive device
   changes and are covered by backups.

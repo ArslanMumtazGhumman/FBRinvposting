@@ -15,6 +15,13 @@
       "when": 1792310668705,
       "tag": "0001_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792318488022,
+      "tag": "0002_batch_index",
+      "breakpoints": true
     }
   ]
 }

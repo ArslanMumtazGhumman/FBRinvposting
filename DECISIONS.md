@@ -83,3 +83,54 @@ Choices made where the brief left room. Simpler option first; revisit if it hurt
 - **Existing routes are validated too:** login, token save, FBR validate/post/reg-type. FBR payloads are
   checked against the exact v1.12 field set; unknown fields are dropped before the payload reaches FBR.
 - **`src/app.ts` builds the app; `src/server.ts` listens.** Tests mount the real app on an ephemeral port.
+
+### Step 4: Posting queue (BullMQ on Redis)
+- **BullMQ 5.81 and ioredis 5.11, not BullMQ 6.** 6.3.16 was published the day before this step, and 6.x
+  changes how connections are configured. 5.81.5 has been out for over a month.
+- **The database status is the lock, not BullMQ job ids.** Queuing moves an invoice to `queued` with
+  `UPDATE … WHERE status IN (draft, validated, failed)`. Only the rows that moved get jobs, so double clicks
+  and two tabs can't queue an invoice twice. Jobs use BullMQ's own ids. If Redis refuses the jobs, those
+  invoices go back to `failed` with "post again" and the request returns 503.
+- **Before calling FBR the worker commits `posting`.** A job that finds its invoice already in `posting`
+  (the worker crashed, the job stalled, or the result write failed) marks it `outcome_unknown` and doesn't
+  call FBR. BullMQ retries a job up to 3 times, but that is only safe for failures that happen before
+  `posting`.
+- **Retry rules are unchanged.** `fbr-client` still retries a post only on connection failure or 502/503/504.
+  A timeout becomes `outcome_unknown` and the job completes, so BullMQ doesn't retry it. Other failures
+  become `failed` (L-500, "post again later"). There are no extra delayed BullMQ retries; the browser's
+  "5s, 30s, 2m…" schedule was a comment, not existing behaviour.
+- **Posting an `outcome_unknown` invoice again needs `{ "confirmNotInIris": true }`** on
+  `POST /invoices/:id/post`, after a person has checked IRIS. Batches skip these invoices.
+- **The idempotency key is the invoice id** (it was the `Idempotency-Key` header, the web's `localRef`). It
+  is stable, and the invoice can't change after posting. If api_calls already holds an `ok` row for the key,
+  the worker marks the invoice posted from that row and doesn't post again.
+- **3 per business uses a Redis lease semaphore** (`queue/slots.ts`): a sorted set per business scored by
+  lease expiry, with Redis server time, shared by every worker process. BullMQ's per-group limits are a
+  Pro feature. When a business is full, the job is moved back to delayed for 0.3–1 s
+  (`moveToDelayed` + `DelayedError`, which doesn't count as an attempt), so other businesses' jobs keep
+  flowing. Leases expire after 4 × FBR timeout + 60 s, so a crashed worker can't hold a slot forever.
+  `POST_WORKER_CONCURRENCY` (default 12) is the per-process total.
+- **The worker uses the API database role, acting as the user who queued the job.** No new role, and RLS
+  still applies. If that user loses access before the job runs, the job does nothing and the invoice stays
+  `queued`. That's rare; an owner can see it.
+- **The worker builds the FBR payload** (`lib/fbr-payload.ts`, a copy of the web's `toPayload` and
+  `issuesFromResponse`) from the stored invoice and the business, and checks it with the zod
+  `FbrInvoicePayload`. The seller fields always come from the business, so the old seller-NTN check isn't
+  needed. The web's tax rules (`validateInvoice`) aren't repeated on the server; the web runs them before
+  queuing (step 5) and FBR is the authority. Issues carry no `hint`; the web adds hints from the code.
+- **The synchronous `POST /api/fbr/:businessId/post` route is removed,** along with the in-process `inflight`
+  set. `validate`, `reference` and `reg-type` stay synchronous because they have no side effects.
+- **SSE progress reads Postgres, not Redis pub/sub.** Every `BATCH_POLL_MS` (default 1 s) the stream
+  counts the batch's statuses and sends invoices whose `updated_at` changed, with a 10 s overlap plus dedupe
+  so late commits aren't missed. This works with any number of API and worker processes, survives restarts
+  (reconnecting replays the current state) and needs no Redis connection per browser. Cost: one indexed
+  query per open stream per second (new index `invoices_business_batch_idx`). `GET /batches/:id` gives the
+  same counts as JSON.
+- **A batch is just a `batch_id` on the invoices.** Queuing an invoice again (for example after fixing a
+  rejection) moves it to the new batch, so the old batch's totals shrink. There's no separate batches table.
+- **Up to 5000 ids per batch request.** Bulk import sends invoices in chunks of 500, but posting a whole
+  import in one batch keeps a single progress bar.
+- **docker-compose still lacks redis and a worker service until step 6.** The image already contains
+  `dist/worker.js`. The worker has no HTTP port, so its service must disable the image's healthcheck.
+- **Until step 5 the production web build can't post.** `FbrGatewayService.post` still calls the removed
+  route. The offline demo (`npm start`, mock FBR) is unaffected. Step 5 switches `PostingService` to the queue.

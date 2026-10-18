@@ -37,6 +37,29 @@ export class Client {
     try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
     return { status: r.status, body: parsed as T, text };
   }
+  /** Reads a Server-Sent Events stream until it closes (or timeoutMs passes). */
+  async events(path: string, timeoutMs = 20_000): Promise<{ status: number; events: { event: string; data: any }[] }> {
+    const r = await fetch(this.base + path, {
+      headers: { Accept: 'text/event-stream', Cookie: [...this.cookies].map(([k, v]) => `${k}=${v}`).join('; ') },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!r.ok || !r.body) return { status: r.status, events: [] };
+    const events: { event: string; data: any }[] = [];
+    let buf = '';
+    for await (const chunk of r.body.pipeThrough(new TextDecoderStream())) {
+      buf += chunk;
+      let end;
+      while ((end = buf.indexOf('\n\n')) >= 0) {
+        const block = buf.slice(0, end);
+        buf = buf.slice(end + 2);
+        const field = (name: string) => block.split('\n').find(l => l.startsWith(name + ': '))?.slice(name.length + 2);
+        const event = field('event');
+        const data = field('data');
+        if (event && data) events.push({ event, data: JSON.parse(data) });
+      }
+    }
+    return { status: r.status, events };
+  }
   get = <T = any>(p: string) => this.req<T>('GET', p);
   post = <T = any>(p: string, b?: unknown, h?: Record<string, string>) => this.req<T>('POST', p, b ?? {}, h);
   put = <T = any>(p: string, b: unknown) => this.req<T>('PUT', p, b);

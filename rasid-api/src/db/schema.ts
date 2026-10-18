@@ -166,6 +166,7 @@ export const invoices = pgTable('invoices', {
   index('invoices_business_created_idx').on(t.businessId, t.createdAt.desc(), t.id.desc()),
   index('invoices_business_status_idx').on(t.businessId, t.status),
   index('invoices_business_date_idx').on(t.businessId, t.invoiceDate),
+  index('invoices_business_batch_idx').on(t.businessId, t.batchId).where(sql`${t.batchId} is not null`),
   check('invoices_debit_note_ref', sql`${t.invoiceType} <> 'Debit Note' or ${t.invoiceRefNo} <> ''`),
   check('invoices_posted_has_irn', sql`${t.status} <> 'posted' or ${t.fbrInvoiceNumber} is not null`),
 ]);

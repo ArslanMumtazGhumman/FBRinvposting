@@ -71,6 +71,12 @@ export type InvoiceUpdate = z.infer<typeof InvoiceUpdate>;
 /** Bulk import: validated row by row so one bad invoice doesn't reject the chunk. */
 export const InvoiceBulk = z.object({ invoices: z.array(z.unknown()).min(1).max(500) });
 
+/** POST /invoices/:id/post. An outcome_unknown invoice is posted again only after a person checked IRIS. */
+export const PostOne = z.object({ confirmNotInIris: z.boolean().optional() });
+
+/** POST /invoices/post-batch */
+export const PostBatch = z.object({ ids: z.array(Id).min(1).max(5000) });
+
 const STATUSES = ['draft', 'validated', 'queued', 'posting', 'posted', 'failed', 'outcome_unknown'] as const;
 export const InvoiceStatus = z.enum(STATUSES);
 

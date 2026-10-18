@@ -11,6 +11,7 @@ import { customerRoutes } from './routes/customers.js';
 import { fbrRoutes } from './routes/fbr.js';
 import { importMappingRoutes } from './routes/import-mappings.js';
 import { invoiceRoutes } from './routes/invoices.js';
+import { postingRoutes } from './routes/posting.js';
 import { productRoutes } from './routes/products.js';
 
 /** The Express app without a listener (server.ts listens; tests mount it on an ephemeral port). */
@@ -47,6 +48,7 @@ export function createApp() {
   app.use('/api/auth', authRoutes);
   app.use('/api/businesses', businessRoutes);
   app.use('/api/businesses/:businessId/credentials', credentialRoutes);
+  app.use('/api/businesses/:businessId/invoices', postingRoutes);
   app.use('/api/businesses/:businessId/invoices', invoiceRoutes);
   app.use('/api/businesses/:businessId/customers', customerRoutes);
   app.use('/api/businesses/:businessId/products', productRoutes);

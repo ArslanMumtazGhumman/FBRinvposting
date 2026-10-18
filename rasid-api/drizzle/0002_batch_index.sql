@@ -1,0 +1,1 @@
+CREATE INDEX "invoices_business_batch_idx" ON "invoices" USING btree ("business_id","batch_id") WHERE "invoices"."batch_id" is not null;
