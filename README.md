@@ -28,14 +28,25 @@ Sign in with any email and an 8+ character password. Sample business, customers,
 ## Run the full stack
 
 ```bash
-cd rasid-api
-cp .env.example .env     # fill VAULT_KEY_V1, SESSION_SECRET, the two database URLs and REDIS_URL (see the file)
-npm install
-npx tsx --env-file=.env src/db/migrate.ts   # as the table owner; also creates the API login role
-npx tsx --env-file=.env src/seed.ts owner@company.pk "Owner Name" "a-strong-password" 1234567 "Company (Pvt) Ltd"
+cp .env.example .env            # fill the three passwords, VAULT_KEY_V1 and SESSION_SECRET (see the file)
+docker compose up -d --build    # postgres, redis → migrate (one-off) → api, worker → web on http://localhost:8080
+docker compose run --rm migrate node dist/seed.js owner@company.pk "Owner Name" "a-strong-password" 1234567 "Company (Pvt) Ltd"
 #   → prints a TOTP secret: add it to Google Authenticator / Authy
-cd .. && docker compose up --build      # web + api on http://localhost:8080
 ```
+
+| Service | What it does |
+| --- | --- |
+| `postgres` | PostgreSQL 16, volume `pg-data`. Not published to the host. |
+| `redis` | Redis 7 for the posting queue: password, append-only file, `noeviction`, volume `redis-data`. Not published. |
+| `migrate` | Runs once per `up`: applies migrations as the table owner and creates the API login role. Also runs `seed`. |
+| `api` | The API, as the RLS-bound login role. Never sees the table owner's password. |
+| `worker` | Same image, `node dist/worker.js`: posts queued invoices to FBR. `docker compose up -d --scale worker=2` adds more; still 3 per business in total. |
+| `web` | nginx: the Angular build plus `/api` proxy (20 MB body limit on bulk import only, unbuffered SSE). |
+
+Upgrading: `docker compose up -d --build` rebuilds, runs `migrate`, then restarts `api` and `worker`. Stopping the worker
+lets in-flight posts finish (2 minutes' grace); if it is killed, the posts it had in flight become "Check IRIS".
+
+To run the API outside Docker, use `rasid-api/.env.example` and `npm run db:migrate`, `npm run dev`, `npm run dev:worker`.
 
 Production builds (`ng build`) use `environment.ts`: `useApi: true`, API at same-origin `/api`. All data then lives
 in Postgres and posting runs on the server queue. To develop the web app against a local API, set
@@ -114,6 +125,8 @@ flight per business, a timed-out post becomes `outcome_unknown` and is never ret
 - **Large businesses:** the web app caches the newest 5,000 invoices of the active business and filters
   them in the browser. Move the invoice list to server-side filtering and paging (the API already supports
   it) before a business passes that.
+- **Backups:** back up the `pg-data` volume (or use a managed Postgres with point-in-time recovery). Redis holds only
+  queue state; the invoices' status in Postgres is the record.
 - **Keys:** load `VAULT_KEY_*` from KMS/Vault, not a file. Rotate by adding `VAULT_KEY_V2` and
   switching `VAULT_ACTIVE_KEY`.
 - **FBR logo:** the invoice print view has a placeholder box. Use the official Digital Invoicing System

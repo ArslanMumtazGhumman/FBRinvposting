@@ -182,3 +182,35 @@ Choices made where the brief left room. Simpler option first; revisit if it hurt
 - **Web unit tests** (`ng test`, Vitest + HttpTestingController) cover `ApiStoreService` and the queue path
   of `PostingService`. Shared fixtures live in `src/testing/`, excluded from the app build. CI runs them.
   Vitest for `tax.ts` / `smart-mapper.ts` is step 7.
+
+### Step 6: docker-compose
+- **One `.env` at the repo root drives compose; `rasid-api/.env.example` stays for running the API outside
+  Docker.** Compose builds the connection URLs from the passwords (`POSTGRES_PASSWORD`, `DB_APP_PASSWORD`,
+  `REDIS_PASSWORD`), so they are written once. Passwords end up inside URLs, so `.env.example` asks for hex.
+- **No `env_file` on the app containers.** Each service lists the variables it gets, so `api` and `worker` never
+  receive the table owner's password or `MIGRATION_DATABASE_URL`; only `migrate` does. The catch: a new
+  variable (for example `VAULT_KEY_V2` when rotating keys) must be added to `docker-compose.yml` too.
+- **Migrations run as a one-off `migrate` service** (same image, `node dist/db/migrate.js`). `api` and
+  `worker` wait for it to finish successfully (`service_completed_successfully`), so a failed migration
+  stops the rollout instead of starting new code on an old schema. Seeding uses the same service:
+  `docker compose run --rm migrate node dist/seed.js …`.
+- **Redis:** password-protected, `appendonly yes`, `maxmemory-policy noeviction`, its own volume. Without
+  persistence a restart would drop queued jobs (the invoices would stay `queued`); eviction could do the same.
+- **Only `web` publishes a port.** Postgres, Redis and the API are reachable on the compose network only.
+- **Worker:** same image with `node dist/worker.js`, the image's HTTP healthcheck disabled, and
+  `stop_grace_period: 2m`, so a stop or upgrade lets in-flight posts record their result. The smoke test checks
+  a graceful restart mid-batch (all 500 posted, none twice) and a SIGKILL mid-batch: the at most 3 interrupted
+  posts become `outcome_unknown` after BullMQ's stalled-job check (~30 s), the rest post, and none is sent twice.
+- **nginx changes that the new features need:** a 20 MB body limit on `/invoices/bulk` only (500 invoices
+  with several lines each is ~2.5 MB, over the old 2 MB limit), and unbuffered, long-lived proxying for
+  `/batches/:id/events` (SSE). The API also sends `X-Accel-Buffering: no`.
+- **Two existing bugs, found when the stack first ran in compose, are fixed:**
+  - The web image ran stock `nginx` as `USER nginx`, which can't create its cache directories, so the container
+    crash-looped. It now uses `nginxinc/nginx-unprivileged:1.27-alpine` (non-root, port 8080, read-only filesystem with `/tmp` as tmpfs).
+  - nginx's security headers (CSP, HSTS, X-Frame-Options…) were set at server level, but the `/` and asset
+    locations had their own `add_header`, and nginx then drops the inherited ones. `index.html` and all assets were
+    served without a CSP. The headers now live in `deploy/security-headers.conf`, included in each such location.
+- **Angular `inlineCritical` is off in production.** With the CSP actually applied, Chrome blocked the inline
+  `onload` handler that critical-CSS inlining adds to the stylesheet link. Turning inlining off is simpler than
+  loosening `script-src`. Cost: the stylesheet loads normally instead of after first paint, a small
+  difference for an app behind a login.

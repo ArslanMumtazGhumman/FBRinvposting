@@ -1,18 +1,111 @@
 # Single-server deployment (pilot / first ~100 customers).
 # Put a TLS-terminating proxy or CDN (Cloudflare, AWS ALB) in front of port 8080.
+#
+#   cp .env.example .env          # fill in the secrets (see the file)
+#   docker compose up -d --build  # migrate runs first, then api, worker and web
+#   docker compose run --rm migrate node dist/seed.js owner@company.pk "Owner Name" "a-strong-password" 1234567 "Company (Pvt) Ltd"
+#
+# Only web (8080) is published. Postgres and Redis are reachable on the internal network only.
+#
+# Each container gets only the variables it needs (no env_file), so the API and worker never see
+# the table owner's password. When rotating vault keys, add VAULT_KEY_V2 here as well.
+x-app: &app
+  build: ./rasid-api
+  image: rasid-api:local
+  environment: &app-env
+    NODE_ENV: ${NODE_ENV:-production}
+    PORT: ${PORT:-3000}
+    DATABASE_URL: postgres://rasid_api:${DB_APP_PASSWORD:?set DB_APP_PASSWORD in .env}@postgres:5432/rasid
+    REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}@redis:6379
+    VAULT_KEY_V1: ${VAULT_KEY_V1:?set VAULT_KEY_V1 in .env}
+    VAULT_ACTIVE_KEY: ${VAULT_ACTIVE_KEY:-v1}
+    SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+    CORS_ORIGINS: ${CORS_ORIGINS:-}
+    DB_POOL_MAX: ${DB_POOL_MAX:-10}
+    FBR_BASE_URL: ${FBR_BASE_URL:-https://gw.fbr.gov.pk}
+    FBR_TIMEOUT_MS: ${FBR_TIMEOUT_MS:-30000}
+    POST_WORKER_CONCURRENCY: ${POST_WORKER_CONCURRENCY:-12}
+    POST_CONCURRENCY_PER_BUSINESS: ${POST_CONCURRENCY_PER_BUSINESS:-3}
+    BATCH_POLL_MS: ${BATCH_POLL_MS:-1000}
+  read_only: true
+  tmpfs: ["/tmp"]
+  security_opt: ["no-new-privileges:true"]
+
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: rasid
+      POSTGRES_USER: rasid_owner          # table owner; only migrate uses it
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes: ["pg-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rasid_owner -d rasid"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # The queue must not lose or evict jobs: append-only file, no eviction.
+    command: ["sh", "-c", "exec redis-server --appendonly yes --maxmemory-policy noeviction --requirepass \"$$REDIS_PASSWORD\""]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env}
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  # One-off: applies migrations as the table owner and creates the API login role. Also used for seed.
+  migrate:
+    <<: *app
+    command: ["node", "dist/db/migrate.js"]
+    environment:
+      <<: *app-env
+      MIGRATION_DATABASE_URL: postgres://rasid_owner:${POSTGRES_PASSWORD}@postgres:5432/rasid
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck: { disable: true }
+    restart: "no"
+
+  api:
+    <<: *app
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  # Same image, different command: posts queued invoices to FBR. Scale with `--scale worker=N`;
+  # the 3-per-business limit holds across all of them.
+  worker:
+    <<: *app
+    command: ["node", "dist/worker.js"]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    healthcheck: { disable: true }   # no HTTP port
+    stop_grace_period: 2m            # let in-flight posts record their outcome
+    restart: unless-stopped
+
   web:
     build: ./rasid-web
-    ports: ["8080:8080"]
-    depends_on: [api]
-    restart: unless-stopped
-  api:
-    build: ./rasid-api
-    env_file: ./rasid-api/.env
-    volumes: ["api-data:/data"]
-    restart: unless-stopped
+    image: rasid-web:local
+    ports: ["${WEB_PORT:-8080}:8080"]
+    depends_on:
+      api: { condition: service_healthy }
     read_only: true
     tmpfs: ["/tmp"]
     security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 3s
+    restart: unless-stopped
+
 volumes:
-  api-data:
+  pg-data:
+  redis-data:
