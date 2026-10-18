@@ -21,7 +21,9 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: rasid-api/package-lock.json }
       - run: npm ci
+      - run: npm run typecheck
       - run: npm test
+      - run: npm run build
       - run: npm audit --omit=dev --audit-level=high
   images:
     needs: [web, api]

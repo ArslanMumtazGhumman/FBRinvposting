@@ -5,19 +5,22 @@
  */
 import crypto from 'node:crypto';
 import { all, insert } from './db.js';
+import type { AuditRow } from '../types/models.js';
 
-const sha = (s) => crypto.createHash('sha256').update(s).digest('hex');
+export type AuditEntry = Omit<AuditRow, 'at' | 'prev' | 'hash'>;
 
-export function audit(entry) {
+const sha = (s: string) => crypto.createHash('sha256').update(s).digest('hex');
+
+export function audit(entry: AuditEntry): AuditRow {
   const list = all('audit');
-  const prev = list.length ? list[list.length - 1].hash : 'genesis';
-  const row = { at: new Date().toISOString(), ...entry, prev };
+  const prev = list.length ? list[list.length - 1]!.hash : 'genesis';
+  const row = { at: new Date().toISOString(), ...entry, prev } as AuditRow;
   row.hash = sha(prev + JSON.stringify({ ...row, hash: undefined }));
   insert('audit', row);
   return row;
 }
 
-export function verifyChain() {
+export function verifyChain(): boolean {
   let prev = 'genesis';
   for (const row of all('audit')) {
     const expect = sha(prev + JSON.stringify({ ...row, hash: undefined }));
@@ -27,4 +30,4 @@ export function verifyChain() {
   return true;
 }
 
-export const hashPayload = (obj) => sha(JSON.stringify(obj));
+export const hashPayload = (obj: unknown) => sha(JSON.stringify(obj));

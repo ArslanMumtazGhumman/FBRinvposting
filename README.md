@@ -5,7 +5,7 @@ Post sales-tax invoices to FBR's Digital Invoicing API (PRAL spec v1.12) from a 
 ```
 rasid/
 ├── rasid-web/   Angular 21 app (standalone components, signals, zoneless, CDK virtual scroll, SheetJS in a Web Worker)
-├── rasid-api/   Node 22 API: sessions + 2FA, AES-256-GCM token vault, FBR gateway with retry/idempotency, audit chain
+├── rasid-api/   Node 22 + TypeScript API: sessions + 2FA, AES-256-GCM token vault, FBR gateway with retry/idempotency, audit chain
 ├── docker-compose.yml
 └── .github/workflows/ci.yml
 ```
@@ -30,13 +30,23 @@ Sign in with any email and an 8+ character password. Sample business, customers,
 cd rasid-api
 cp .env.example .env     # fill VAULT_KEY_V1 and SESSION_SECRET (commands are in the file)
 npm install
-node --env-file=.env src/seed.js owner@company.pk "Owner Name" "a-strong-password" 1234567 "Company (Pvt) Ltd"
+npx tsx --env-file=.env src/seed.ts owner@company.pk "Owner Name" "a-strong-password" 1234567 "Company (Pvt) Ltd"
 #   → prints a TOTP secret: add it to Google Authenticator / Authy
 cd .. && docker compose up --build      # web + api on http://localhost:8080
 ```
 
 Production builds (`ng build`) use `environment.ts`: `mockFbr: false`, API at same-origin `/api`.
 Then in the app: Settings → FBR connection → paste the sandbox token from IRIS → Sandbox scenarios → Run all.
+
+## API development
+
+```bash
+cd rasid-api
+npm run dev         # tsx watch, no build step
+npm run typecheck   # tsc --noEmit
+npm test            # node:test via tsx
+npm run build       # tsc -> dist/ (what the Docker image runs)
+```
 
 ## What is where
 
@@ -49,15 +59,15 @@ Then in the app: Settings → FBR connection → paste the sandbox token from IR
 | Excel parsing off the main thread | `rasid-web/src/app/core/import/excel.worker.ts` |
 | Validate → post orchestration, bounded-concurrency queue, retries | `rasid-web/src/app/core/posting.service.ts` |
 | FBR simulator / HTTP gateway switch | `rasid-web/src/app/core/fbr-gateway.service.ts` |
-| Token vault (AES-256-GCM, key versions, AAD = business) | `rasid-api/src/lib/vault.js` |
-| Login, scrypt, TOTP, lockout, cookie session, CSRF | `rasid-api/src/lib/auth.js` |
-| PRAL client (sandbox `_sb` routing, timeouts, safe retry) | `rasid-api/src/lib/fbr-client.js` |
-| Idempotent posting, reference cache, seller-NTN guard | `rasid-api/src/routes/fbr.js` |
-| Hash-chained audit log | `rasid-api/src/lib/audit.js` |
+| Token vault (AES-256-GCM, key versions, AAD = business) | `rasid-api/src/lib/vault.ts` |
+| Login, scrypt, TOTP, lockout, cookie session, CSRF | `rasid-api/src/lib/auth.ts` |
+| PRAL client (sandbox `_sb` routing, timeouts, safe retry) | `rasid-api/src/lib/fbr-client.ts` |
+| Idempotent posting, reference cache, seller-NTN guard | `rasid-api/src/routes/fbr.ts` |
+| Hash-chained audit log | `rasid-api/src/lib/audit.ts` |
 
 ## Before going live
 
-- **Storage:** `rasid-api/src/lib/db.js` is a JSON-file store for development and a single-node pilot.
+- **Storage:** `rasid-api/src/lib/db.ts` is a JSON-file store for development and a single-node pilot.
   Replace it with PostgreSQL (schema in the product plan) with row-level security on `business_id`,
   and move posting into BullMQ workers on Redis. Route handlers only use its five functions.
 - **Invoices:** the web app keeps invoices in the browser (localStorage) in this version. Add

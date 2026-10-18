@@ -7,6 +7,7 @@
  * - The token is passed in, used for one request and never logged.
  */
 import { config } from '../config.js';
+import type { FbrEnv } from '../types/models.js';
 
 const PATHS = {
   post: '/di_data/v1/di/postinvoicedata',
@@ -23,14 +24,21 @@ const PATHS = {
   SROItem: '/pdi/v2/SROItem',
   statl: '/dist/v1/statl',
   regType: '/dist/v1/Get_Reg_Type',
-};
+} as const;
+type PathKind = keyof typeof PATHS;
 const RETRY_MS = [1000, 4000, 10000];
 
+/** status: HTTP status, 0 = network failure, -1 = timed out. */
 export class FbrHttpError extends Error {
-  constructor(status, message) { super(message); this.status = status; }
+  attempts?: number;
+  constructor(readonly status: number, message: string) { super(message); }
 }
 
-async function once(method, url, token, body) {
+// FBR responses are loosely shaped; callers read the fields they need.
+export type FbrJson = any;
+export interface FbrResult { json: FbrJson; attempt: number; latencyMs: number }
+
+async function once(method: string, url: string, token: string, body?: unknown): Promise<FbrJson> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), config.fbrTimeoutMs);
   try {
@@ -41,15 +49,15 @@ async function once(method, url, token, body) {
       signal: ctrl.signal,
     });
     const text = await res.text();
-    let json; try { json = text ? JSON.parse(text) : null; } catch { json = { raw: text.slice(0, 500) }; }
+    let json: FbrJson; try { json = text ? JSON.parse(text) : null; } catch { json = { raw: text.slice(0, 500) }; }
     if (res.status === 401) throw new FbrHttpError(401, 'FBR rejected the token (401).');
     if (res.status >= 500) throw new FbrHttpError(res.status, `FBR server error ${res.status}`);
     if (!res.ok) throw new FbrHttpError(res.status, `FBR returned ${res.status}`);
     return json;
   } catch (e) {
-    if (e.name === 'AbortError') throw new FbrHttpError(-1, 'FBR did not respond in time');
+    if (e instanceof Error && e.name === 'AbortError') throw new FbrHttpError(-1, 'FBR did not respond in time');
     if (e instanceof FbrHttpError) throw e;
-    throw new FbrHttpError(0, `Network error reaching FBR: ${e.message}`);
+    throw new FbrHttpError(0, `Network error reaching FBR: ${e instanceof Error ? e.message : String(e)}`);
   } finally { clearTimeout(timer); }
 }
 
@@ -59,14 +67,15 @@ async function once(method, url, token, body) {
  * only when the request provably did not complete (connection failure, 502/503/504)
  * and surface timeouts as "unknown" for a human to check in IRIS before re-posting.
  */
-async function call(method, path, token, body, { retry = true, safeToRepeat = true } = {}) {
+async function call(method: string, path: string, token: string, body?: unknown, { retry = true, safeToRepeat = true } = {}): Promise<FbrResult> {
   const url = config.fbrBaseUrl + path;
   for (let attempt = 0; ; attempt++) {
     const started = Date.now();
     try {
       const json = await once(method, url, token, body);
       return { json, attempt: attempt + 1, latencyMs: Date.now() - started };
-    } catch (e) {
+    } catch (err) {
+      const e = err as FbrHttpError;
       const transient = safeToRepeat ? (e.status <= 0 || e.status >= 500) : (e.status === 0 || [502, 503, 504].includes(e.status));
       if (!retry || !transient || attempt >= RETRY_MS.length) { e.attempts = attempt + 1; throw e; }
       await new Promise(r => setTimeout(r, RETRY_MS[attempt]));
@@ -75,12 +84,12 @@ async function call(method, path, token, body, { retry = true, safeToRepeat = tr
 }
 
 export const fbr = {
-  post: (token, env, payload) => call('POST', PATHS.post + (env === 'sandbox' ? '_sb' : ''), token, payload, { safeToRepeat: false }),
-  validate: (token, env, payload) => call('POST', PATHS.validate + (env === 'sandbox' ? '_sb' : ''), token, payload),
-  reference: (token, kind, query = '') => {
-    if (!PATHS[kind] || ['post', 'validate', 'statl', 'regType'].includes(kind)) throw new Error('Unknown reference list');
-    return call('GET', PATHS[kind] + query, token);
+  post: (token: string, env: FbrEnv, payload: unknown) => call('POST', PATHS.post + (env === 'sandbox' ? '_sb' : ''), token, payload, { safeToRepeat: false }),
+  validate: (token: string, env: FbrEnv, payload: unknown) => call('POST', PATHS.validate + (env === 'sandbox' ? '_sb' : ''), token, payload),
+  reference: (token: string, kind: string, query = '') => {
+    if (!Object.hasOwn(PATHS, kind) || ['post', 'validate', 'statl', 'regType'].includes(kind)) throw new Error('Unknown reference list');
+    return call('GET', PATHS[kind as PathKind] + query, token);
   },
-  regType: (token, registrationNo) => call('POST', PATHS.regType, token, { Registration_No: registrationNo }),
-  statl: (token, regno, date) => call('POST', PATHS.statl, token, { regno, date }),
+  regType: (token: string, registrationNo: string) => call('POST', PATHS.regType, token, { Registration_No: registrationNo }),
+  statl: (token: string, regno: string, date: string) => call('POST', PATHS.statl, token, { regno, date }),
 };

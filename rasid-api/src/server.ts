@@ -1,5 +1,5 @@
 import cookieParser from 'cookie-parser';
-import express from 'express';
+import express, { type NextFunction, type Request, type Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { config } from './config.js';
@@ -40,9 +40,9 @@ app.use('/api/businesses', businessRoutes);
 app.use('/api/businesses/:businessId/credentials', credentialRoutes);
 app.use('/api/fbr/:businessId', fbrRoutes);
 
-app.use((_req, res) => res.status(404).json({ message: 'Not found' }));
+app.use((_req: Request, res: Response) => res.status(404).json({ message: 'Not found' }));
 // Never leak stack traces; log a redacted line.
-app.use((err, req, res, _next) => {
+app.use((err: Error & { status?: number }, req: Request, res: Response, _next: NextFunction) => {
   console.error(JSON.stringify({ at: new Date().toISOString(), path: req.path, error: String(err.message).replace(/Bearer\s+\S+/g, 'Bearer [redacted]') }));
   res.status(err.status === 400 ? 400 : 500).json({ message: err.status === 400 ? 'Malformed request' : 'Something went wrong. Try again.' });
 });

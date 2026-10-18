@@ -1,10 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import os from 'node:os';
+import path from 'node:path';
 
 process.env.SESSION_SECRET = 'test-secret-' + crypto.randomUUID();
 process.env.VAULT_KEY_V1 = crypto.randomBytes(32).toString('base64');
-process.env.DATA_DIR = '/tmp/rasid-test-' + crypto.randomUUID();
+process.env.DATA_DIR = path.join(os.tmpdir(), 'rasid-test-' + crypto.randomUUID());
 
 const { encrypt, decrypt } = await import('../src/lib/vault.js');
 const { audit, verifyChain } = await import('../src/lib/audit.js');
@@ -20,7 +22,7 @@ test('vault round-trips and binds ciphertext to its business', () => {
 test('audit chain detects tampering', () => {
   audit({ actor: 'u1', action: 'a' }); audit({ actor: 'u1', action: 'b' });
   assert.equal(verifyChain(), true);
-  all('audit')[0].action = 'changed';
+  all('audit')[0]!.action = 'changed';
   assert.equal(verifyChain(), false);
 });
 

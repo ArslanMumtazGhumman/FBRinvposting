@@ -7,18 +7,19 @@
  */
 import crypto from 'node:crypto';
 import { config } from '../config.js';
+import type { Sealed } from '../types/models.js';
 
-export function encrypt(plaintext, aad) {
+export function encrypt(plaintext: string, aad: string): Sealed {
   const version = config.vaultActiveKey;
   const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv('aes-256-gcm', config.vaultKeys[version], iv);
+  const cipher = crypto.createCipheriv('aes-256-gcm', config.vaultKeys[version]!, iv);
   cipher.setAAD(Buffer.from(aad));
   const ct = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
   const tag = cipher.getAuthTag();
   return { version, data: Buffer.concat([iv, tag, ct]).toString('base64') };
 }
 
-export function decrypt(sealed, aad) {
+export function decrypt(sealed: Sealed, aad: string): string {
   const key = config.vaultKeys[sealed.version];
   if (!key) throw new Error(`Unknown vault key version ${sealed.version}`);
   const buf = Buffer.from(sealed.data, 'base64');
@@ -28,4 +29,4 @@ export function decrypt(sealed, aad) {
   return Buffer.concat([decipher.update(buf.subarray(28)), decipher.final()]).toString('utf8');
 }
 
-export const hint = (token) => '••••' + token.slice(-4);
+export const hint = (token: string) => '••••' + token.slice(-4);
