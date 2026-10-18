@@ -4,10 +4,12 @@
  * cookie, and account lockout after repeated failures.
  */
 import crypto from 'node:crypto';
+import { and, eq } from 'drizzle-orm';
 import type { NextFunction, Request, Response } from 'express';
 import jwt from 'jsonwebtoken';
 import { config } from '../config.js';
-import { find, upsert } from './db.js';
+import { db, withUser } from '../db/client.js';
+import { memberships, users } from '../db/schema.js';
 import type { Role, User } from '../types/models.js';
 
 const SESSION_HOURS = 12;
@@ -55,15 +57,15 @@ export class AuthError extends Error {
   constructor(readonly code: string, message: string, readonly status = 401) { super(message); }
 }
 
-export function login(email: string, password: string, otp?: string): User {
-  const user = find('users', u => u.email === String(email).toLowerCase());
-  if (user?.lockedUntil && Date.parse(user.lockedUntil) > Date.now()) throw new AuthError('LOCKED', 'Too many attempts. Try again in 15 minutes.', 429);
+export async function login(email: string, password: string, otp?: string): Promise<User> {
+  const [user] = await db.select().from(users).where(eq(users.email, String(email).toLowerCase()));
+  if (user?.lockedUntil && user.lockedUntil.getTime() > Date.now()) throw new AuthError('LOCKED', 'Too many attempts. Try again in 15 minutes.', 429);
   // Always run scrypt so response time does not reveal whether the email exists.
   const ok = user ? verifyPassword(password, user.passwordHash) : (hashPassword(password), false);
   if (!user || !ok) {
     if (user) {
       const fails = (user.fails ?? 0) + 1;
-      upsert('users', u => u.id === user.id, { ...user, fails, lockedUntil: fails >= MAX_FAILS ? new Date(Date.now() + LOCK_MINUTES * 60000).toISOString() : null });
+      await db.update(users).set({ fails, lockedUntil: fails >= MAX_FAILS ? new Date(Date.now() + LOCK_MINUTES * 60000) : null }).where(eq(users.id, user.id));
     }
     throw new AuthError('BAD_CREDENTIALS', 'Email or password is incorrect.');
   }
@@ -71,7 +73,7 @@ export function login(email: string, password: string, otp?: string): User {
     if (!otp) throw new AuthError('OTP_REQUIRED', 'Enter your authenticator code.');
     if (!verifyTotp(user.totpSecret, otp)) throw new AuthError('BAD_OTP', 'That code is not valid.');
   }
-  upsert('users', u => u.id === user.id, { ...user, fails: 0, lockedUntil: null, lastLoginAt: new Date().toISOString() });
+  await db.update(users).set({ fails: 0, lockedUntil: null, lastLoginAt: new Date() }).where(eq(users.id, user.id));
   return user;
 }
 
@@ -88,31 +90,37 @@ export function clearSession(res: Response) {
 }
 
 /** Express middleware: valid session + CSRF header on state-changing requests. */
-export function requireAuth(req: Request, res: Response, next: NextFunction) {
+export async function requireAuth(req: Request, res: Response, next: NextFunction) {
+  let userId: string;
   try {
     const claims = jwt.verify(req.cookies?.rasid_session ?? '', config.sessionSecret, { algorithms: ['HS256'] }) as jwt.JwtPayload;
-    const user = find('users', u => u.id === claims.sub);
-    if (!user) throw new Error('no user');
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
-      const header = req.get('X-CSRF-Token') ?? '';
-      const cookie: string = req.cookies?.rasid_csrf ?? '';
-      if (!header || header.length !== cookie.length || !crypto.timingSafeEqual(Buffer.from(header), Buffer.from(cookie))) {
-        return res.status(403).json({ code: 'CSRF', message: 'Security check failed. Reload the page.' });
-      }
-    }
-    req.user = user;
-    next();
+    userId = String(claims.sub);
   } catch {
-    res.status(401).json({ code: 'UNAUTHENTICATED', message: 'Sign in again.' });
+    return res.status(401).json({ code: 'UNAUTHENTICATED', message: 'Sign in again.' });
   }
+  // Outside the try: a database failure is a 500, not "sign in again".
+  const [user] = await db.select().from(users).where(eq(users.id, userId));
+  if (!user) return res.status(401).json({ code: 'UNAUTHENTICATED', message: 'Sign in again.' });
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+    const header = req.get('X-CSRF-Token') ?? '';
+    const cookie: string = req.cookies?.rasid_csrf ?? '';
+    if (!header || header.length !== cookie.length || !crypto.timingSafeEqual(Buffer.from(header), Buffer.from(cookie))) {
+      return res.status(403).json({ code: 'CSRF', message: 'Security check failed. Reload the page.' });
+    }
+  }
+  req.user = user;
+  next();
 }
 
+/** Uses the role in the business when the route is business-scoped (after requireBusiness). */
 export const requireRole = (...roles: Role[]) => (req: Request, res: Response, next: NextFunction) =>
-  roles.includes(req.user.role) ? next() : res.status(403).json({ code: 'FORBIDDEN', message: 'Your role cannot do this.' });
+  roles.includes(req.membership?.role ?? req.user.role) ? next() : res.status(403).json({ code: 'FORBIDDEN', message: 'Your role cannot do this.' });
 
 /** Membership check: the user must belong to the business in :businessId. */
-export function requireBusiness(req: Request<{ businessId: string }>, res: Response, next: NextFunction) {
-  const m = find('memberships', x => x.userId === req.user.id && x.businessId === req.params.businessId);
+export async function requireBusiness(req: Request<{ businessId: string }>, res: Response, next: NextFunction) {
+  const userId = req.user.id;
+  const [m] = await withUser(userId, tx => tx.select().from(memberships)
+    .where(and(eq(memberships.userId, userId), eq(memberships.businessId, String(req.params.businessId)))));
   if (!m) return res.status(404).json({ code: 'NOT_FOUND', message: 'Business not found.' });
   req.membership = m;
   next();

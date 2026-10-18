@@ -5,7 +5,7 @@ Post sales-tax invoices to FBR's Digital Invoicing API (PRAL spec v1.12) from a 
 ```
 rasid/
 ├── rasid-web/   Angular 21 app (standalone components, signals, zoneless, CDK virtual scroll, SheetJS in a Web Worker)
-├── rasid-api/   Node 22 + TypeScript API: sessions + 2FA, AES-256-GCM token vault, FBR gateway with retry/idempotency, audit chain
+├── rasid-api/   Node 22 + TypeScript API (PostgreSQL 16 + Drizzle, row-level security): sessions + 2FA, AES-256-GCM token vault, FBR gateway with retry/idempotency, audit chain
 ├── docker-compose.yml
 └── .github/workflows/ci.yml
 ```
@@ -28,8 +28,9 @@ Sign in with any email and an 8+ character password. Sample business, customers,
 
 ```bash
 cd rasid-api
-cp .env.example .env     # fill VAULT_KEY_V1 and SESSION_SECRET (commands are in the file)
+cp .env.example .env     # fill VAULT_KEY_V1, SESSION_SECRET and the two database URLs (see the file)
 npm install
+npx tsx --env-file=.env src/db/migrate.ts   # as the table owner; also creates the API login role
 npx tsx --env-file=.env src/seed.ts owner@company.pk "Owner Name" "a-strong-password" 1234567 "Company (Pvt) Ltd"
 #   → prints a TOTP secret: add it to Google Authenticator / Authy
 cd .. && docker compose up --build      # web + api on http://localhost:8080
@@ -44,7 +45,8 @@ Then in the app: Settings → FBR connection → paste the sandbox token from IR
 cd rasid-api
 npm run dev         # tsx watch, no build step
 npm run typecheck   # tsc --noEmit
-npm test            # node:test via tsx
+npm test            # node:test via tsx; starts Postgres 16 with Testcontainers (needs Docker)
+npm run db:generate # after editing src/db/schema.ts: writes a new drizzle/ migration
 npm run build       # tsc -> dist/ (what the Docker image runs)
 ```
 
@@ -64,12 +66,13 @@ npm run build       # tsc -> dist/ (what the Docker image runs)
 | PRAL client (sandbox `_sb` routing, timeouts, safe retry) | `rasid-api/src/lib/fbr-client.ts` |
 | Idempotent posting, reference cache, seller-NTN guard | `rasid-api/src/routes/fbr.ts` |
 | Hash-chained audit log | `rasid-api/src/lib/audit.ts` |
+| Database schema | `rasid-api/src/db/schema.ts` |
+| Row-level security, append-only and posted-invoice guards | `rasid-api/drizzle/0001_rls.sql` |
+| Per-request business context (`withBusiness`) | `rasid-api/src/db/client.ts` |
 
 ## Before going live
 
-- **Storage:** `rasid-api/src/lib/db.ts` is a JSON-file store for development and a single-node pilot.
-  Replace it with PostgreSQL (schema in the product plan) with row-level security on `business_id`,
-  and move posting into BullMQ workers on Redis. Route handlers only use its five functions.
+- **Posting queue:** posting still runs inside the API request; move it into BullMQ workers on Redis.
 - **Invoices:** the web app keeps invoices in the browser (localStorage) in this version. Add
   `/api/invoices` CRUD backed by Postgres before onboarding real customers, so records survive device
   changes and are covered by backups.

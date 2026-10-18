@@ -5,8 +5,8 @@ declare global {
     interface Request {
       /** Set by requireAuth. */
       user: User;
-      /** Set by requireBusiness. */
-      membership: Membership;
+      /** Set by requireBusiness on business-scoped routes. */
+      membership?: Membership;
     }
   }
 }

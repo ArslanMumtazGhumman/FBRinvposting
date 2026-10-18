@@ -14,20 +14,26 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "seed": "tsx src/seed.ts",
-    "test": "tsx --test test/*.test.ts"
+    "test": "tsx --test test/*.test.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/db/migrate.ts"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",
+    "drizzle-orm": "^0.45.4",
     "express": "^5.1.0",
     "express-rate-limit": "^8.1.0",
     "helmet": "^8.1.0",
-    "jsonwebtoken": "^9.0.2"
+    "jsonwebtoken": "^9.0.2",
+    "postgres": "^3.4.9"
   },
   "devDependencies": {
+    "@testcontainers/postgresql": "^12.2.1",
     "@types/cookie-parser": "^1.4.10",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.20.5",
+    "drizzle-kit": "^0.31.11",
     "tsx": "^4.23.15",
     "typescript": "~5.9"
   }

@@ -8,6 +8,9 @@ export const config = {
   env: process.env.NODE_ENV ?? 'development',
   port: Number(process.env.PORT ?? 3000),
   sessionSecret: req('SESSION_SECRET'),
+  /** API login role (member of rasid_app). Never the table owner: RLS would not apply. */
+  databaseUrl: req('DATABASE_URL'),
+  dbPoolMax: Number(process.env.DB_POOL_MAX ?? 10),
   vaultKeys: Object.fromEntries(
     Object.entries(process.env)
       .filter((e): e is [string, string] => e[0].startsWith('VAULT_KEY_') && !!e[1])
@@ -17,7 +20,6 @@ export const config = {
   corsOrigins: (process.env.CORS_ORIGINS ?? 'http://localhost:4200').split(',').map(s => s.trim()),
   fbrBaseUrl: process.env.FBR_BASE_URL ?? 'https://gw.fbr.gov.pk',
   fbrTimeoutMs: Number(process.env.FBR_TIMEOUT_MS ?? 30000),
-  dataDir: process.env.DATA_DIR ?? './data',
 };
 
 if (config.vaultKeys[config.vaultActiveKey]?.length !== 32) {

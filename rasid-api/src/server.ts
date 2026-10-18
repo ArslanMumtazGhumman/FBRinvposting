@@ -3,6 +3,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { config } from './config.js';
+import { assertRlsEnforced, closeDb } from './db/client.js';
 import { authRoutes } from './routes/auth.js';
 import { businessRoutes } from './routes/businesses.js';
 import { credentialRoutes } from './routes/credentials.js';
@@ -47,4 +48,9 @@ app.use((err: Error & { status?: number }, req: Request, res: Response, _next: N
   res.status(err.status === 400 ? 400 : 500).json({ message: err.status === 400 ? 'Malformed request' : 'Something went wrong. Try again.' });
 });
 
-app.listen(config.port, () => console.log(`rasid-api listening on :${config.port}`));
+await assertRlsEnforced();
+const server = app.listen(config.port, () => console.log(`rasid-api listening on :${config.port}`));
+
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.once(signal, () => server.close(() => void closeDb().finally(() => process.exit(0))));
+}

@@ -12,9 +12,9 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 COPY --from=build /app/dist ./dist
-RUN mkdir -p /data && chown node:node /data
+COPY drizzle ./drizzle
 USER node
-ENV DATA_DIR=/data
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=3s CMD wget -qO- http://localhost:3000/api/health || exit 1
+# Migrations: run `node dist/db/migrate.js` (with MIGRATION_DATABASE_URL) before starting a new version.
 CMD ["node", "dist/server.js"]
