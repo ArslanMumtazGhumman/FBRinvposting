@@ -1,0 +1,18 @@
+# Single-server deployment (pilot / first ~100 customers).
+# Put a TLS-terminating proxy or CDN (Cloudflare, AWS ALB) in front of port 8080.
+services:
+  web:
+    build: ./rasid-web
+    ports: ["8080:8080"]
+    depends_on: [api]
+    restart: unless-stopped
+  api:
+    build: ./rasid-api
+    env_file: ./rasid-api/.env
+    volumes: ["api-data:/data"]
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp"]
+    security_opt: ["no-new-privileges:true"]
+volumes:
+  api-data:

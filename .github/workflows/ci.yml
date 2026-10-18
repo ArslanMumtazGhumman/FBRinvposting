@@ -1,0 +1,36 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: rasid-web } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: rasid-web/package-lock.json }
+      - run: npm ci
+      - run: npx ng build --configuration production
+      - run: npm audit --omit=dev --audit-level=high
+  api:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: rasid-api } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: rasid-api/package-lock.json }
+      - run: npm ci
+      - run: npm test
+      - run: npm audit --omit=dev --audit-level=high
+  images:
+    needs: [web, api]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t rasid-web:${{ github.sha }} rasid-web
+      - run: docker build -t rasid-api:${{ github.sha }} rasid-api
+      - uses: aquasecurity/trivy-action@0.28.0
+        with: { image-ref: "rasid-api:${{ github.sha }}", severity: "CRITICAL,HIGH", exit-code: "1" }
+      # Push to your registry and deploy to staging here; promote the same tag to production after approval.
