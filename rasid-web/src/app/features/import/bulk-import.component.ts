@@ -8,6 +8,7 @@ import { sampleSheet } from '../../core/import/sample-sheet';
 import { TARGET_FIELDS, buildInvoices, headerSignature, suggestMapping } from '../../core/import/smart-mapper';
 import { FieldIssue, Invoice, LineItem } from '../../core/models';
 import { PostingService, issuesFromResponse } from '../../core/posting.service';
+import { ReferenceService } from '../../core/reference.service';
 import { Store } from '../../core/store';
 import { cleanNtn, computeLine, normaliseRate, toPayload, validateInvoice } from '../../core/tax';
 import { UiService } from '../../core/ui.service';
@@ -273,6 +274,7 @@ export class BulkImportComponent implements OnDestroy {
   protected posting = inject(PostingService);
   private fbr = inject(FbrGatewayService);
   private ui = inject(UiService);
+  private ref = inject(ReferenceService);
 
   protected stepNames = ['Upload', 'Match columns', 'Review and fix', 'Post'];
   protected fields = TARGET_FIELDS;
@@ -400,7 +402,7 @@ export class BulkImportComponent implements OnDestroy {
         .catch(e => this.ui.toast(errorMessage(e, 'Could not save the column layout'), 'error'));
     }
     this.batchId = uid('bt_');
-    const { invoices } = buildInvoices(f.rows, this.mapping(), biz, this.batchId);
+    const { invoices } = buildInvoices(f.rows, this.mapping(), biz, this.batchId, st => this.ref.defaultRate(st));
     // Avoid clashing with existing invoice numbers (idempotency keys).
     const existing = new Set(this.store.bizInvoices().map(i => i.localRef));
     invoices.forEach(i => { if (existing.has(i.localRef)) i.localRef = `${i.localRef}-R${this.batchId.slice(-3)}`; });
@@ -412,7 +414,7 @@ export class BulkImportComponent implements OnDestroy {
   /* ------------------------------ step 3 ------------------------------ */
   protected localIssues = computed(() => {
     const biz = this.store.business()!;
-    return this.invoices().map(inv => validateInvoice(inv, biz));
+    return this.invoices().map(inv => validateInvoice(inv, biz, hs => this.ref.allowedUoms(hs)));
   });
   private issuesFor = (i: number) => [...(this.fbrIssues().get(i) ?? []), ...this.localIssues()[i]];
   protected readyCount = computed(() => this.localIssues().filter((l, i) => !l.length && !(this.fbrIssues().get(i)?.length)).length);
@@ -513,7 +515,7 @@ export class BulkImportComponent implements OnDestroy {
   async downloadResult() {
     const XLSX = await import('xlsx');
     const f = this.file()!;
-    const { rowToInvoice } = buildInvoices(f.rows, this.mapping(), this.store.business()!, this.batchId);
+    const { rowToInvoice } = buildInvoices(f.rows, this.mapping(), this.store.business()!, this.batchId, st => this.ref.defaultRate(st));
     const ids = this.invoices().map(v => v.id);
     const out = f.rows.map((r, i) => {
       const inv = this.store.invoiceById(ids[rowToInvoice[i]]);

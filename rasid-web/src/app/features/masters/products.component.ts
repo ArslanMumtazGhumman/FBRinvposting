@@ -1,8 +1,9 @@
-import { ChangeDetectionStrategy, Component, computed, inject, signal } from '@angular/core';
+import { ChangeDetectionStrategy, Component, effect, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { errorMessage } from '../../core/api';
-import { HS_SAMPLE, SALE_TYPES, UOMS, saleTypeDef } from '../../core/fbr-reference';
+import { HS_SAMPLE, SALE_TYPES } from '../../core/fbr-reference';
 import { Product } from '../../core/models';
+import { HsOption, ReferenceService } from '../../core/reference.service';
 import { Store } from '../../core/store';
 import { UiService } from '../../core/ui.service';
 import { formatPkr, uid } from '../../core/util';
@@ -30,13 +31,13 @@ import { IconComponent } from '../../shared/icon.component';
             @if (hsMatches().length && hsQuery()) {
               <ul class="hs-list" role="listbox">
                 @for (h of hsMatches(); track h.code) {
-                  <li role="option" (mousedown)="pickHs(d, h.code, h.uom)"><b>{{ h.code }}</b> {{ h.desc }}</li>
+                  <li role="option" (mousedown)="pickHs(d, h.code)"><b>{{ h.code }}</b> {{ h.desc }}</li>
                 }
               </ul>
             }
-            <span class="hint">Search covers a sample list offline; the live app searches FBR's full HS code list.</span>
+            <span class="hint">Searches FBR's HS code list, refreshed nightly. The offline demo searches a sample.</span>
           </div>
-          <div class="field"><label for="pu">Unit</label><select id="pu" class="select" [(ngModel)]="d.uoM">@for (u of uoms; track u) { <option>{{ u }}</option> }</select></div>
+          <div class="field"><label for="pu">Unit</label><select id="pu" class="select" [(ngModel)]="d.uoM">@for (u of uomsFor(d.uoM); track u) { <option>{{ u }}</option> }</select></div>
           <div class="field"><label for="ps">Sale type</label><select id="ps" class="select" [(ngModel)]="d.saleType" (ngModelChange)="d.rate = rates(d.saleType)[0]">@for (s of saleTypes; track s.name) { <option [value]="s.name">{{ s.name }}</option> }</select></div>
           <div class="field"><label for="pr">Rate</label><select id="pr" class="select" [(ngModel)]="d.rate">@for (r of rates(d.saleType); track r) { <option>{{ r }}</option> }</select></div>
           <div class="field"><label for="pp">Unit price (PKR, excl. tax)</label><input id="pp" class="input" type="number" min="0" step="any" [(ngModel)]="d.unitPrice" /></div>
@@ -75,25 +76,44 @@ import { IconComponent } from '../../shared/icon.component';
 export class ProductsComponent {
   protected store = inject(Store);
   private ui = inject(UiService);
-  protected uoms = UOMS;
+  private ref = inject(ReferenceService);
   protected saleTypes = SALE_TYPES;
   protected fmt = formatPkr;
   protected draft = signal<Product | null>(null);
   protected hsQuery = signal('');
-  protected hsMatches = computed(() => {
-    const q = this.hsQuery().toLowerCase().trim();
-    if (!q || /^\d{4}\.\d{4}$/.test(q)) return [];
-    const words = q.split(/\s+/);
-    return HS_SAMPLE.filter(h => h.code.startsWith(q) || words.every(w => h.desc.toLowerCase().includes(w))).slice(0, 8);
-  });
-  protected rates = (st: string) => saleTypeDef(st)?.rates ?? ['18%'];
+  protected hsMatches = signal<HsOption[]>([]);
+  private hsTimer?: ReturnType<typeof setTimeout>;
+  protected rates = (st: string) => { const r = this.ref.rates(st); return r.length ? r : ['18%']; };
+  protected uomsFor = (current: string) => { const u = this.ref.uoms(); return current && !u.includes(current) ? [current, ...u] : u; };
+
+  constructor() {
+    // Debounced HS search (PRAL's list through the API; the bundled sample offline).
+    effect(() => {
+      const q = this.hsQuery().trim();
+      clearTimeout(this.hsTimer);
+      if (q.length < 2 || /^\d{4}\.\d{4}$/.test(q)) { this.hsMatches.set([]); return; }
+      this.hsTimer = setTimeout(async () => {
+        const found = await this.ref.searchHs(q, 8);
+        if (this.hsQuery().trim() === q) this.hsMatches.set(found);
+      }, 200);
+    });
+  }
 
   edit(p: Product | null) {
     const b = this.store.business()!;
     this.hsQuery.set('');
-    this.draft.set(p ? { ...p } : { id: '', businessId: b.id, name: '', hsCode: '', uoM: UOMS[0], saleType: b.defaultSaleType, rate: this.rates(b.defaultSaleType)[0], unitPrice: 0 });
+    this.draft.set(p ? { ...p } : { id: '', businessId: b.id, name: '', hsCode: '', uoM: this.ref.uoms()[0], saleType: b.defaultSaleType, rate: this.rates(b.defaultSaleType)[0], unitPrice: 0 });
   }
-  pickHs(d: Product, code: string, uom: string) { d.hsCode = code; d.uoM = uom; this.hsQuery.set(''); this.draft.set({ ...d }); }
+  /** Picks an HS code and the unit FBR expects for it (PRAL's HS_UOM; the sample's unit offline). */
+  async pickHs(d: Product, code: string) {
+    d.hsCode = code;
+    this.hsQuery.set('');
+    this.draft.set({ ...d });
+    const allowed = await this.ref.hsUoms(code);
+    const uom = allowed?.[0] ?? (this.store.mode === 'local' ? HS_SAMPLE.find(h => h.code === code)?.uom : undefined);
+    const cur = this.draft();
+    if (uom && cur?.hsCode === code && !allowed?.includes(cur.uoM)) this.draft.set({ ...cur, uoM: uom });
+  }
   remove(p: Product) {
     this.store.deleteProduct(p.id).catch(e => this.ui.toast(errorMessage(e, 'Could not delete the product'), 'error'));
   }

@@ -21,6 +21,11 @@ describe('rates', () => {
   it.each([['18%', 18], ['0%', 0], ['Exempt', 0], ['1.43%', 1.43], ['18% along with rupees 60 per kilogram', 18], ['', 0]])('rateValue(%s) = %s', (r, v) => expect(rateValue(r)).toBe(v));
   it.each<[unknown, string]>([[18, '18%'], [0.18, '18%'], ['18', '18%'], ['18 %', '18%'], ['17.5%', '17.5%'], ['exempt', 'Exempt'], ['', ''], ['n/a', 'n/a']])(
     'normaliseRate(%s) = %s', (input, out) => expect(normaliseRate(input)).toBe(out));
+  it('emptyLine takes the rate it is given (PRAL), else the bundled default', () => {
+    expect(emptyLine('Goods at Reduced Rate', '10%').rate).toBe('10%');
+    expect(emptyLine('Goods at Reduced Rate').rate).toBe('1%');
+    expect(emptyLine('Magic').rate).toBe('18%');
+  });
   it('round2 rounds half up at 2 decimals', () => {
     expect(round2(1.005)).toBe(1.01);
     expect(round2(2.675)).toBe(2.68);
@@ -107,6 +112,21 @@ describe('validateInvoice (client-side FBR rules)', () => {
     const inv = invoice();
     inv.items = [{ ...inv.items[0]!, salesTaxApplicable: 278.5 }];
     expect(codes(inv)).toEqual([]);
+  });
+
+  it('HS→UOM: the bundled rule by default, PRAL rules when a lookup is passed', () => {
+    const inv = invoice();
+    inv.items = [{ ...inv.items[0]!, hsCode: '2716.0000', uoM: 'KG' }];
+    expect(codes(inv)).toContain('0096'); // bundled: electricity only in KWH
+
+    const pral = (hs: string) => ({ '1701.9910': ['KG', 'Ton'], '2716.0000': ['KWH'] } as Record<string, string[]>)[hs];
+    const sugar = invoice();
+    expect(validateInvoice(sugar, SELLER, pral)).toEqual([]);
+    sugar.items = [{ ...sugar.items[0]!, uoM: 'Liter' }];
+    const issue = validateInvoice(sugar, SELLER, pral).find(i => i.field === 'uoM');
+    expect(issue).toMatchObject({ code: '0099', itemIndex: 0 });
+    expect(issue?.message).toContain('KG, Ton');
+    expect(validateInvoice(sugar, SELLER, () => undefined).map(i => i.code)).not.toContain('0099'); // no rule known
   });
 
   it('a seller without a valid NTN cannot post', () => {

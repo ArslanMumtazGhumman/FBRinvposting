@@ -54,10 +54,11 @@ export function invoiceTotals(items: FbrItem[]) {
   }), { value: 0, salesTax: 0, furtherTax: 0, other: 0, total: 0 });
 }
 
-export function emptyLine(saleType: string): LineItem {
+/** A blank line. Pass the rate from ReferenceService (PRAL); the bundled default is the offline fallback. */
+export function emptyLine(saleType: string, rate?: string): LineItem {
   const def = saleTypeDef(saleType);
   return {
-    hsCode: '', productDescription: '', rate: def?.rates[0] ?? '18%', uoM: 'Numbers, pieces, units',
+    hsCode: '', productDescription: '', rate: rate ?? def?.offlineRates[0] ?? '18%', uoM: 'Numbers, pieces, units',
     quantity: 1, unitPrice: 0, totalValues: 0, valueSalesExcludingST: 0, fixedNotifiedValueOrRetailPrice: 0,
     salesTaxApplicable: 0, salesTaxWithheldAtSource: 0, extraTax: 0, furtherTax: 0, sroScheduleNo: '',
     fedPayable: 0, discount: 0, saleType, sroItemSerialNo: '',
@@ -67,11 +68,16 @@ export function emptyLine(saleType: string): LineItem {
 const NTN_RE = /^(\d{7}|\d{9}|\d{13})$/;
 export const cleanNtn = (v: string) => String(v ?? '').replace(/[^0-9]/g, '');
 
+/** UOMs FBR accepts for an HS code; undefined when no rule is known. */
+export type HsUomLookup = (hsCode: string) => readonly string[] | undefined;
+const bundledHsUom: HsUomLookup = hs => (HS_UOM_RULES[hs] ? [HS_UOM_RULES[hs]] : undefined);
+
 /**
  * Client-side pre-validation mirroring FBR rules, so most rejections are
  * caught before a network call. FBR validate is still the final check.
+ * `allowedUoms` is ReferenceService.allowedUoms (PRAL's HS_UOM) in the app.
  */
-export function validateInvoice(inv: Invoice, seller: Business): FieldIssue[] {
+export function validateInvoice(inv: Invoice, seller: Business, allowedUoms: HsUomLookup = bundledHsUom): FieldIssue[] {
   const out: FieldIssue[] = [];
   const add = (code: string, message: string, field?: FieldIssue['field'], itemIndex?: number) =>
     out.push({ code, message, field, itemIndex, hint: FBR_ERROR_HELP[code], source: 'local' });
@@ -98,8 +104,11 @@ export function validateInvoice(inv: Invoice, seller: Business): FieldIssue[] {
     if (!it.productDescription?.trim()) add('L-002', 'Add a product description', 'productDescription', i);
     if (!it.rate) add('0046', 'Provide rate', 'rate', i);
     if (!it.uoM) add('0099', 'Provide UOM', 'uoM', i);
-    const fixedUom = HS_UOM_RULES[it.hsCode];
-    if (fixedUom && it.uoM !== fixedUom) add('0096', `For this HS code only ${fixedUom} UOM is allowed`, 'uoM', i);
+    const uoms = it.uoM ? allowedUoms(it.hsCode) : undefined;
+    if (uoms?.length && !uoms.includes(it.uoM)) {
+      if (uoms.length === 1) add('0096', `For this HS code only ${uoms[0]} UOM is allowed`, 'uoM', i);
+      else add('0099', `UOM for this HS code must be one of: ${uoms.join(', ')}`, 'uoM', i);
+    }
     if (!(it.quantity > 0)) add('0098', 'Provide quantity', 'quantity', i);
     if (!(it.valueSalesExcludingST > 0) && !def?.usesRetailPrice) add('0021', 'Provide value of sales excl. ST', 'valueSalesExcludingST', i);
     if (def?.usesRetailPrice && !(it.fixedNotifiedValueOrRetailPrice > 0)) add('0090', 'Provide retail price', 'fixedNotifiedValueOrRetailPrice', i);

@@ -188,8 +188,12 @@ export interface BuildResult {
   rowToInvoice: number[]; // source row index → invoice index
 }
 
-/** Turn mapped rows into invoices; rows sharing an invoice no. become lines of one invoice. */
-export function buildInvoices(rows: Record<string, unknown>[], map: Record<string, string | null>, biz: Business, batchId: string): BuildResult {
+/**
+ * Turn mapped rows into invoices; rows sharing an invoice no. become lines of one invoice.
+ * `defaultRate` fills rows without a rate (ReferenceService.defaultRate: PRAL, else the bundled default).
+ */
+export function buildInvoices(rows: Record<string, unknown>[], map: Record<string, string | null>, biz: Business, batchId: string,
+  defaultRate?: (saleType: string) => string): BuildResult {
   const get = (r: Record<string, unknown>, key: string) => { const h = map[key]; return h ? r[h] : undefined; };
   const groups = new Map<string, number[]>();
   rows.forEach((r, i) => {
@@ -219,7 +223,7 @@ export function buildInvoices(rows: Record<string, unknown>[], map: Record<strin
     const items: LineItem[] = idxs.map(ri => {
       const r = rows[ri];
       const saleType = matchSaleType(get(r, 'saleType'), biz.defaultSaleType);
-      const base = emptyLine(saleType);
+      const base = emptyLine(saleType, defaultRate?.(saleType));
       const rateIn = get(r, 'rate');
       const line: LineItem = {
         ...base,

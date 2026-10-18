@@ -3,9 +3,10 @@ import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { errorMessage } from '../../core/api';
 import { FbrGatewayService } from '../../core/fbr-gateway.service';
-import { HS_SAMPLE, HS_UOM_RULES, PROVINCES, SALE_TYPES, SCENARIOS, UOMS, saleTypeDef } from '../../core/fbr-reference';
+import { HS_SAMPLE, PROVINCES, SALE_TYPES, SCENARIOS, saleTypeDef } from '../../core/fbr-reference';
 import { FieldIssue, Invoice, LineItem } from '../../core/models';
 import { PostingService } from '../../core/posting.service';
+import { HsOption, ReferenceService, SroOption } from '../../core/reference.service';
 import { Store } from '../../core/store';
 import { cleanNtn, computeLine, emptyLine, invoiceTotals, validateInvoice } from '../../core/tax';
 import { UiService } from '../../core/ui.service';
@@ -165,7 +166,7 @@ import { StatusChipComponent } from '../../shared/status-chip.component';
                     <td class="idx">{{ i + 1 }}</td>
                     <td><input class="cell" list="products" [class.invalid]="err('productDescription', i)" [ngModel]="l.productDescription" (ngModelChange)="setLine(i, 'productDescription', $event)" (change)="fillFromProduct(i)" placeholder="Description" [attr.aria-label]="'Line ' + (i+1) + ' product'" /></td>
                     <td><input class="cell hs" list="hs" [class.invalid]="err('hsCode', i)" [title]="errText('hsCode', i)" [ngModel]="l.hsCode" (ngModelChange)="setLine(i, 'hsCode', $event)" placeholder="0000.0000" [attr.aria-label]="'Line ' + (i+1) + ' HS code'" /></td>
-                    <td><select class="cell" [class.invalid]="err('uoM', i)" [title]="errText('uoM', i)" [ngModel]="l.uoM" (ngModelChange)="setLine(i, 'uoM', $event)" [attr.aria-label]="'Line ' + (i+1) + ' unit'">@for (u of uoms; track u) { <option [value]="u">{{ u }}</option> }</select></td>
+                    <td><select class="cell" [class.invalid]="err('uoM', i)" [title]="errText('uoM', i)" [ngModel]="l.uoM" (ngModelChange)="setLine(i, 'uoM', $event)" [attr.aria-label]="'Line ' + (i+1) + ' unit'">@for (u of uomsFor(l.uoM); track u) { <option [value]="u">{{ u }}</option> }</select></td>
                     <td><select class="cell st" [class.invalid]="err('saleType', i)" [ngModel]="l.saleType" (ngModelChange)="setSaleType(i, $event)" [attr.aria-label]="'Line ' + (i+1) + ' sale type'">@for (s of saleTypes; track s.name) { <option [value]="s.name">{{ s.name }}</option> }</select></td>
                     <td><select class="cell rate" [class.invalid]="err('rate', i)" [ngModel]="l.rate" (ngModelChange)="setLine(i, 'rate', $event)" [attr.aria-label]="'Line ' + (i+1) + ' rate'">@for (r of ratesFor(l.saleType, l.rate); track r) { <option [value]="r">{{ r }}</option> }</select></td>
                     <td><input class="cell num" type="number" min="0" step="any" [class.invalid]="err('quantity', i)" [ngModel]="l.quantity" (ngModelChange)="setLine(i, 'quantity', +$event)" [attr.aria-label]="'Line ' + (i+1) + ' quantity'" /></td>
@@ -185,8 +186,10 @@ import { StatusChipComponent } from '../../shared/status-chip.component';
                         <label class="field"><span>Extra tax</span><input class="input" type="number" step="any" [ngModel]="l.extraTax" (ngModelChange)="setLine(i, 'extraTax', +$event)" /></label>
                         <label class="field"><span>FED payable</span><input class="input" type="number" step="any" [ngModel]="l.fedPayable" (ngModelChange)="setLine(i, 'fedPayable', +$event)" /></label>
                         <label class="field"><span>ST withheld at source</span><input class="input" type="number" step="any" [ngModel]="l.salesTaxWithheldAtSource" (ngModelChange)="setLine(i, 'salesTaxWithheldAtSource', +$event)" /></label>
-                        <label class="field"><span>SRO / schedule no.</span><input class="input" [ngModel]="l.sroScheduleNo" (ngModelChange)="setLine(i, 'sroScheduleNo', $event)" /></label>
-                        <label class="field"><span>SRO item serial</span><input class="input" [ngModel]="l.sroItemSerialNo" (ngModelChange)="setLine(i, 'sroItemSerialNo', $event)" /></label>
+                        <label class="field"><span>SRO / schedule no.</span><input class="input" [attr.list]="'sro-' + i" (focus)="loadSro(i)" [ngModel]="l.sroScheduleNo" (ngModelChange)="setLine(i, 'sroScheduleNo', $event)" /></label>
+                        <datalist [id]="'sro-' + i">@for (o of sro()[i]?.schedules ?? []; track o.id) { <option [value]="o.desc"></option> }</datalist>
+                        <label class="field"><span>SRO item serial</span><input class="input" [attr.list]="'sroi-' + i" (focus)="loadSroItems(i)" [ngModel]="l.sroItemSerialNo" (ngModelChange)="setLine(i, 'sroItemSerialNo', $event)" /></label>
+                        <datalist [id]="'sroi-' + i">@for (o of sro()[i]?.items ?? []; track o.id) { <option [value]="o.desc"></option> }</datalist>
                         <div class="field"><span>Further tax</span><div class="ro-box">{{ fmt(l.furtherTax, 2) }}</div></div>
                       </div>
                       @if (saleNote(l.saleType); as n) { <p class="subtle">{{ n }}</p> }
@@ -196,7 +199,7 @@ import { StatusChipComponent } from '../../shared/status-chip.component';
               </tbody>
             </table>
             <datalist id="products">@for (p of store.bizProducts(); track p.id) { <option [value]="p.name">{{ p.hsCode }}</option> }</datalist>
-            <datalist id="hs">@for (h of hsList; track h.code) { <option [value]="h.code">{{ h.desc }}</option> }</datalist>
+            <datalist id="hs">@for (h of hsOptions(); track h.code) { <option [value]="h.code">{{ h.desc }}</option> }</datalist>
           </div>
           <div class="add-row"><button class="btn btn-ghost" (click)="addLine()"><app-icon name="plus" /> Add line</button><span class="subtle">Press Enter in the last unit price to add a line.</span></div>
         </section>
@@ -262,6 +265,7 @@ export class InvoiceEditorComponent {
   private fbr = inject(FbrGatewayService);
   private ui = inject(UiService);
   private router = inject(Router);
+  private ref = inject(ReferenceService);
 
   readonly id = input<string>();
   protected isNew = true;
@@ -272,10 +276,13 @@ export class InvoiceEditorComponent {
 
   protected biz = this.store.business;
   protected provinces = PROVINCES;
-  protected uoms = UOMS;
   protected saleTypes = SALE_TYPES;
   protected scenarios = SCENARIOS;
-  protected hsList = HS_SAMPLE;
+  /** Suggestions for the HS code cells: PRAL search results as the user types (bundled sample offline). */
+  protected hsOptions = signal<HsOption[]>(HS_SAMPLE.map(h => ({ code: h.code, desc: h.desc })));
+  /** SRO schedule and item suggestions per line, loaded when the field gets focus. */
+  protected sro = signal<Record<number, { schedules?: SroOption[]; items?: SroOption[] }>>({});
+  private hsTimer?: ReturnType<typeof setTimeout>;
   protected fmt = formatPkr;
 
   protected totals = computed(() => invoiceTotals(this.inv()?.items ?? []));
@@ -283,7 +290,7 @@ export class InvoiceEditorComponent {
   protected liveIssues = computed<FieldIssue[]>(() => {
     const v = this.inv(); const b = this.biz();
     if (!v || !b) return [];
-    const local = validateInvoice(v, b);
+    const local = validateInvoice(v, b, hs => this.ref.allowedUoms(hs));
     const fbr = v.issues.filter(i => i.source === 'fbr');
     return [...fbr, ...local.filter(l => !fbr.some(f => f.code === l.code && f.itemIndex === l.itemIndex))];
   });
@@ -294,6 +301,22 @@ export class InvoiceEditorComponent {
   constructor() {
     // With the API, a reload lands here before the business's invoices arrive: wait for them.
     effect(() => { if (!this.started && this.store.ready()) { this.started = true; untracked(() => this.init()); } });
+    // PRAL rates can arrive after a new invoice is set up: move lines still on the bundled default to PRAL's.
+    // Runs when the rates arrive, not on every edit, so a rate the user picks is left alone.
+    effect(() => {
+      if (!this.ref.ratesAsOf()) return;
+      untracked(() => this.isNew && this.inv.update(v => {
+        if (!v) return v;
+        let changed = false;
+        const items = v.items.map(l => {
+          const live = this.ref.rates(l.saleType);
+          if (live.includes(l.rate) || l.rate !== saleTypeDef(l.saleType)?.offlineRates[0]) return l;
+          changed = true;
+          return computeLine({ ...l, rate: live[0] ?? l.rate }, v.buyer, this.biz()?.furtherTaxRate ?? 0);
+        });
+        return changed ? { ...v, items } : v;
+      }));
+    });
   }
 
   private init() {
@@ -312,7 +335,7 @@ export class InvoiceEditorComponent {
     this.inv.set({
       id: uid('i_'), businessId: b.id, localRef: this.store.nextLocalRef(), invoiceType: 'Sale Invoice', invoiceDate: todayIso(),
       buyer: { ntnCnic: '', name: '', province: b.province, address: '', registrationType: 'Registered' },
-      items: [emptyLine(b.defaultSaleType)], invoiceRefNo: '', environment: b.environment, status: 'draft', issues: [],
+      items: [emptyLine(b.defaultSaleType, this.ref.defaultRate(b.defaultSaleType))], invoiceRefNo: '', environment: b.environment, status: 'draft', issues: [],
       attempts: 0, createdAt: at, updatedAt: at, history: [{ at, actor: this.store.user()?.name ?? 'user', action: 'Created' }],
     });
   }
@@ -345,21 +368,43 @@ export class InvoiceEditorComponent {
       const items = v.items.slice();
       let line = { ...items[i], [k]: val } as LineItem;
       if (k === 'hsCode') {
-        const fixed = HS_UOM_RULES[String(val)];
-        const known = HS_SAMPLE.find(h => h.code === val);
-        if (fixed) line.uoM = fixed; else if (known) line.uoM = known.uom;
+        const code = String(val);
+        const allowed = this.ref.allowedUoms(code);
+        const sample = this.store.mode === 'local' ? HS_SAMPLE.find(h => h.code === code) : undefined;
+        if (allowed?.length && !allowed.includes(line.uoM)) line.uoM = allowed[0]; else if (sample) line.uoM = sample.uom;
+        this.findHs(code);
+        void this.applyHsUoms(i, code);
       }
       line = computeLine(line, v.buyer, this.biz()?.furtherTaxRate ?? 0);
       items[i] = line;
       return { ...v, items };
     });
   }
+  /** Debounced HS search for the datalist. */
+  private findHs(q: string) {
+    clearTimeout(this.hsTimer);
+    this.hsTimer = setTimeout(async () => {
+      const found = await this.ref.searchHs(q);
+      if (found.length) this.hsOptions.set(found);
+    }, 200);
+  }
+  /** Once PRAL says which UOMs an HS code takes, switch the line to one of them if needed. */
+  private async applyHsUoms(i: number, code: string) {
+    const allowed = await this.ref.hsUoms(code);
+    if (!allowed?.length) return;
+    this.inv.update(v => {
+      const l = v?.items[i];
+      if (!v || !l || l.hsCode !== code || allowed.includes(l.uoM)) return v;
+      const items = v.items.slice();
+      items[i] = computeLine({ ...l, uoM: allowed[0] }, v.buyer, this.biz()?.furtherTaxRate ?? 0);
+      return { ...v, items };
+    });
+  }
   protected setSaleType(i: number, saleType: string) {
-    const def = saleTypeDef(saleType);
     this.inv.update(v => {
       if (!v) return v;
       const items = v.items.slice();
-      items[i] = computeLine({ ...items[i], saleType, rate: def?.rates[0] ?? items[i].rate }, v.buyer, this.biz()?.furtherTaxRate ?? 0);
+      items[i] = computeLine({ ...items[i], saleType, rate: this.ref.defaultRate(saleType) }, v.buyer, this.biz()?.furtherTaxRate ?? 0);
       return { ...v, items };
     });
   }
@@ -385,7 +430,7 @@ export class InvoiceEditorComponent {
   }
   protected addLine() {
     const st = this.inv()?.items.at(-1)?.saleType ?? this.biz()!.defaultSaleType;
-    this.inv.update(v => v && ({ ...v, items: [...v.items, emptyLine(st)] }));
+    this.inv.update(v => v && ({ ...v, items: [...v.items, emptyLine(st, this.ref.defaultRate(st))] }));
     setTimeout(() => (document.querySelectorAll<HTMLInputElement>('.lines input[list="products"]').item(this.inv()!.items.length - 1))?.focus());
   }
   protected removeLine(i: number) { this.inv.update(v => v && ({ ...v, items: v.items.filter((_, k) => k !== i) })); }
@@ -393,8 +438,25 @@ export class InvoiceEditorComponent {
   protected needsMore(l: LineItem) { return !!saleTypeDef(l.saleType)?.usesRetailPrice; }
   protected saleNote(st: string) { return saleTypeDef(st)?.note; }
   protected ratesFor(st: string, current: string) {
-    const r = saleTypeDef(st)?.rates ?? [];
+    const r = this.ref.rates(st);
     return current && !r.includes(current) ? [current, ...r] : r;
+  }
+  protected uomsFor(current: string) {
+    const u = this.ref.uoms();
+    return current && !u.includes(current) ? [current, ...u] : u;
+  }
+  protected async loadSro(i: number) {
+    const v = this.inv(); const l = v?.items[i];
+    if (!v || !l) return;
+    const schedules = await this.ref.sroSchedules(l.saleType, l.rate, v.invoiceDate);
+    this.sro.update(m => ({ ...m, [i]: { ...m[i], schedules } }));
+  }
+  protected async loadSroItems(i: number) {
+    const v = this.inv(); const l = v?.items[i];
+    const sched = this.sro()[i]?.schedules?.find(s => s.desc === l?.sroScheduleNo);
+    if (!v || !sched) return;
+    const items = await this.ref.sroItems(sched.id, v.invoiceDate);
+    this.sro.update(m => ({ ...m, [i]: { ...m[i], items } }));
   }
 
   protected pickCustomer(name: string) {

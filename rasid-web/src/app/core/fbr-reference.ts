@@ -1,11 +1,12 @@
 /**
  * FBR reference data.
  *
- * Production: these lists are loaded from PRAL reference APIs
- * (https://gw.fbr.gov.pk/pdi/v1/provinces, /uom, /itemdesccode, /pdi/v2/SaleTypeToRate …)
- * by the backend nightly and served from cache. The values below are a
- * local fallback / demo set. Default rates are illustrative — the live
- * SaleTypeToRate API is the source of truth for rates.
+ * With the API, rates, UOMs, HS codes and HS→UOM rules come from PRAL's
+ * reference APIs, cached nightly by rasid-api and read through
+ * ReferenceService. The lists below are for the offline demo and the fallback
+ * when the API has no PRAL copy; their rates are illustrative. Sale type
+ * behaviour (scenario, retail price, exempt), scenarios and error help are
+ * not in PRAL's lists and live only here.
  */
 
 export const PROVINCES = [
@@ -21,37 +22,38 @@ export const UOMS = [
 export interface SaleTypeDef {
   name: string;               // exact saleType string sent to FBR
   scenario: string;           // primary sandbox scenario
-  rates: string[];            // selectable rates, first = default (demo)
+  /** Offline demo and fallback only; live rates come from PRAL via ReferenceService. First = default. */
+  offlineRates: string[];
   usesRetailPrice?: boolean;  // tax computed on retail price (3rd schedule)
   exempt?: boolean;
   note?: string;
 }
 
 export const SALE_TYPES: SaleTypeDef[] = [
-  { name: 'Goods at standard rate (default)', scenario: 'SN001', rates: ['18%'] },
-  { name: 'Goods at Reduced Rate', scenario: 'SN005', rates: ['1%', '5%', '10%', '12%', '15%', '16%'] },
-  { name: 'Exempt Goods', scenario: 'SN006', rates: ['Exempt'], exempt: true },
-  { name: 'Goods at zero-rate', scenario: 'SN007', rates: ['0%'] },
-  { name: '3rd Schedule Goods', scenario: 'SN008', rates: ['18%'], usesRetailPrice: true, note: 'Tax is charged on printed retail price × quantity.' },
-  { name: 'Steel Melting and re-rolling', scenario: 'SN003', rates: ['18%'] },
-  { name: 'Ship breaking', scenario: 'SN004', rates: ['18%'] },
-  { name: 'Cotton Ginners', scenario: 'SN009', rates: ['18%'] },
-  { name: 'Telecommunication services', scenario: 'SN010', rates: ['17%', '19.5%'] },
-  { name: 'Toll Manufacturing', scenario: 'SN011', rates: ['18%'] },
-  { name: 'Petroleum Products', scenario: 'SN012', rates: ['1.43%', '0%'] },
-  { name: 'Electricity Supply to Retailers', scenario: 'SN013', rates: ['5%', '7.5%'] },
-  { name: 'Gas to CNG stations', scenario: 'SN014', rates: ['18%'] },
-  { name: 'Mobile Phones', scenario: 'SN015', rates: ['18%', '25%'] },
-  { name: 'Processing/ Conversion of Goods', scenario: 'SN016', rates: ['5%'] },
-  { name: 'Goods (FED in ST Mode)', scenario: 'SN017', rates: ['8%', '18%'] },
-  { name: 'Services (FED in ST Mode)', scenario: 'SN018', rates: ['8%', '16%'] },
-  { name: 'Services', scenario: 'SN019', rates: ['5%', '16%'] },
-  { name: 'Electric Vehicle', scenario: 'SN020', rates: ['1%'] },
-  { name: 'Cement /Concrete Block', scenario: 'SN021', rates: ['18%'] },
-  { name: 'Potassium Chlorate', scenario: 'SN022', rates: ['18%'] },
-  { name: 'CNG Sales', scenario: 'SN023', rates: ['18%'] },
-  { name: 'Goods as per SRO.297(|)/2023', scenario: 'SN024', rates: ['25%'] },
-  { name: 'Non-Adjustable Supplies', scenario: 'SN025', rates: ['0%', '1%'] },
+  { name: 'Goods at standard rate (default)', scenario: 'SN001', offlineRates: ['18%'] },
+  { name: 'Goods at Reduced Rate', scenario: 'SN005', offlineRates: ['1%', '5%', '10%', '12%', '15%', '16%'] },
+  { name: 'Exempt Goods', scenario: 'SN006', offlineRates: ['Exempt'], exempt: true },
+  { name: 'Goods at zero-rate', scenario: 'SN007', offlineRates: ['0%'] },
+  { name: '3rd Schedule Goods', scenario: 'SN008', offlineRates: ['18%'], usesRetailPrice: true, note: 'Tax is charged on printed retail price × quantity.' },
+  { name: 'Steel Melting and re-rolling', scenario: 'SN003', offlineRates: ['18%'] },
+  { name: 'Ship breaking', scenario: 'SN004', offlineRates: ['18%'] },
+  { name: 'Cotton Ginners', scenario: 'SN009', offlineRates: ['18%'] },
+  { name: 'Telecommunication services', scenario: 'SN010', offlineRates: ['17%', '19.5%'] },
+  { name: 'Toll Manufacturing', scenario: 'SN011', offlineRates: ['18%'] },
+  { name: 'Petroleum Products', scenario: 'SN012', offlineRates: ['1.43%', '0%'] },
+  { name: 'Electricity Supply to Retailers', scenario: 'SN013', offlineRates: ['5%', '7.5%'] },
+  { name: 'Gas to CNG stations', scenario: 'SN014', offlineRates: ['18%'] },
+  { name: 'Mobile Phones', scenario: 'SN015', offlineRates: ['18%', '25%'] },
+  { name: 'Processing/ Conversion of Goods', scenario: 'SN016', offlineRates: ['5%'] },
+  { name: 'Goods (FED in ST Mode)', scenario: 'SN017', offlineRates: ['8%', '18%'] },
+  { name: 'Services (FED in ST Mode)', scenario: 'SN018', offlineRates: ['8%', '16%'] },
+  { name: 'Services', scenario: 'SN019', offlineRates: ['5%', '16%'] },
+  { name: 'Electric Vehicle', scenario: 'SN020', offlineRates: ['1%'] },
+  { name: 'Cement /Concrete Block', scenario: 'SN021', offlineRates: ['18%'] },
+  { name: 'Potassium Chlorate', scenario: 'SN022', offlineRates: ['18%'] },
+  { name: 'CNG Sales', scenario: 'SN023', offlineRates: ['18%'] },
+  { name: 'Goods as per SRO.297(|)/2023', scenario: 'SN024', offlineRates: ['25%'] },
+  { name: 'Non-Adjustable Supplies', scenario: 'SN025', offlineRates: ['0%', '1%'] },
 ];
 
 export function saleTypeDef(name: string): SaleTypeDef | undefined {

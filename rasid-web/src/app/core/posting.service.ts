@@ -7,6 +7,7 @@ import type { ApiStoreService } from './api-store.service';
 import { FbrAuthError, FbrGatewayService, FbrUnknownOutcomeError, TransientFbrError } from './fbr-gateway.service';
 import { FBR_ERROR_HELP } from './fbr-reference';
 import { FbrResponse, FieldIssue, Invoice } from './models';
+import { ReferenceService } from './reference.service';
 import { Store } from './store';
 import { toPayload, validateInvoice } from './tax';
 import { nowIso, sleep } from './util';
@@ -86,6 +87,7 @@ export class PostingService {
   private store = inject(Store);
   private fbr = inject(FbrGatewayService);
   private http = inject(HttpClient);
+  private ref = inject(ReferenceService);
   /** Follows the store: the offline demo posts from the browser, the API store through the server queue. */
   private get useApi() { return this.store.mode === 'api'; }
   /** The server queue cannot be paused per batch; the buttons are hidden then. */
@@ -101,7 +103,7 @@ export class PostingService {
   /** Local + FBR validation without posting. Saves the result. */
   async validate(inv: Invoice): Promise<Invoice> {
     const biz = this.store.business()!;
-    const local = validateInvoice(inv, biz);
+    const local = validateInvoice(inv, biz, hs => this.ref.allowedUoms(hs));
     if (local.length) return this.store.upsertInvoice({ ...inv, issues: local, status: 'draft' });
     const res = await this.fbr.validate({ businessId: biz.id, environment: biz.environment, payload: toPayload(inv, biz), idempotencyKey: inv.localRef });
     const issues = issuesFromResponse(res);
@@ -140,7 +142,7 @@ export class PostingService {
   private async postViaQueue(inv: Invoice, confirmNotInIris: boolean): Promise<Outcome> {
     const biz = this.store.business()!;
     if (inv.status === 'posted') return { ok: true, invoice: inv };
-    const local = validateInvoice(inv, biz);
+    const local = validateInvoice(inv, biz, hs => this.ref.allowedUoms(hs));
     try {
       if (local.length) {
         return { ok: false, invoice: await this.store.upsertInvoice({ ...inv, issues: local, status: 'draft' }), reason: 'invalid' };
@@ -235,7 +237,7 @@ export class PostingService {
   private async postLocally(inv: Invoice, onRetry?: () => void): Promise<Outcome> {
     const biz = this.store.business()!;
     if (inv.status === 'posted') return { ok: true, invoice: inv };
-    const local = validateInvoice(inv, biz);
+    const local = validateInvoice(inv, biz, hs => this.ref.allowedUoms(hs));
     if (local.length) {
       this.store.patchInvoice(inv.id, { issues: local, status: 'failed' });
       return { ok: false, invoice: this.store.invoiceById(inv.id)!, reason: 'invalid' };
