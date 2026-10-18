@@ -13,6 +13,7 @@ import { importMappingRoutes } from './routes/import-mappings.js';
 import { invoiceRoutes } from './routes/invoices.js';
 import { postingRoutes } from './routes/posting.js';
 import { productRoutes } from './routes/products.js';
+import { referenceRoutes } from './routes/reference.js';
 
 /** Every API router and where it is mounted (also read by the tests to enumerate all endpoints). */
 export const ROUTERS: [string, Router][] = [
@@ -25,6 +26,7 @@ export const ROUTERS: [string, Router][] = [
   ['/api/businesses/:businessId/products', productRoutes],
   ['/api/businesses/:businessId/import-mappings', importMappingRoutes],
   ['/api/fbr/:businessId', fbrRoutes],
+  ['/api/reference', referenceRoutes],
 ];
 
 /** The Express app without a listener (server.ts listens; tests mount it on an ephemeral port). */

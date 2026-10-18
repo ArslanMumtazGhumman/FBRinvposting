@@ -208,6 +208,42 @@ export const importMappings = pgTable('import_mappings', {
   createdAt: created(),
 }, t => [uniqueIndex('import_mappings_business_signature_key').on(t.businessId, t.signature)]);
 
+/* ---------------- PRAL reference data (shared by all tenants, no RLS) ---------------- */
+
+/**
+ * Cached PRAL reference responses, as returned by FBR. `params` is the canonical
+ * query without the date; `as_of` is the date the list was asked for
+ * (YYYY-MM-DD, '' for lists that take no date). Written by the nightly job
+ * (src/reference/refresh.ts) and by read-through lookups.
+ */
+export const refLists = pgTable('ref_lists', {
+  kind: text('kind').notNull(),
+  params: text('params').notNull().default(''),
+  asOf: text('as_of').notNull().default(''),
+  data: jsonb('data').$type<unknown[]>().notNull(),
+  fetchedAt: ts('fetched_at').notNull().defaultNow(),
+}, t => [primaryKey({ columns: [t.kind, t.params, t.asOf] })]);
+
+/** /pdi/v1/itemdesccode, one row per HS code, for search. */
+export const hsCodes = pgTable('hs_codes', {
+  code: text('code').primaryKey(),
+  description: text('description').notNull(),
+  fetchedAt: ts('fetched_at').notNull().defaultNow(),
+});
+
+/**
+ * Rasid's own PRAL token, used only to read reference lists. Sealed with the
+ * vault (AAD = 'platform:reference'); set with `reference-cli set-token`,
+ * which connects as the table owner. The API role can read the ciphertext only.
+ */
+export const referenceCredential = pgTable('reference_credential', {
+  id: text('id').primaryKey().default('pral'),
+  keyVersion: text('key_version').notNull(),
+  ciphertext: text('ciphertext').notNull(),
+  hint: text('hint').notNull(),
+  updatedAt: updated(),
+}, t => [check('reference_credential_single', sql`${t.id} = 'pral'`)]);
+
 /* ---------------- append-only ---------------- */
 
 /**

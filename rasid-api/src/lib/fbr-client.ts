@@ -38,9 +38,9 @@ export class FbrHttpError extends Error {
 export type FbrJson = any;
 export interface FbrResult { json: FbrJson; attempt: number; latencyMs: number }
 
-async function once(method: string, url: string, token: string, body?: unknown): Promise<FbrJson> {
+async function once(method: string, url: string, token: string, body: unknown, timeoutMs: number): Promise<FbrJson> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), config.fbrTimeoutMs);
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       method,
@@ -67,12 +67,13 @@ async function once(method: string, url: string, token: string, body?: unknown):
  * only when the request provably did not complete (connection failure, 502/503/504)
  * and surface timeouts as "unknown" for a human to check in IRIS before re-posting.
  */
-async function call(method: string, path: string, token: string, body?: unknown, { retry = true, safeToRepeat = true } = {}): Promise<FbrResult> {
+async function call(method: string, path: string, token: string, body?: unknown,
+  { retry = true, safeToRepeat = true, timeoutMs = config.fbrTimeoutMs } = {}): Promise<FbrResult> {
   const url = config.fbrBaseUrl + path;
   for (let attempt = 0; ; attempt++) {
     const started = Date.now();
     try {
-      const json = await once(method, url, token, body);
+      const json = await once(method, url, token, body, timeoutMs);
       return { json, attempt: attempt + 1, latencyMs: Date.now() - started };
     } catch (err) {
       const e = err as FbrHttpError;
@@ -86,9 +87,10 @@ async function call(method: string, path: string, token: string, body?: unknown,
 export const fbr = {
   post: (token: string, env: FbrEnv, payload: unknown) => call('POST', PATHS.post + (env === 'sandbox' ? '_sb' : ''), token, payload, { safeToRepeat: false }),
   validate: (token: string, env: FbrEnv, payload: unknown) => call('POST', PATHS.validate + (env === 'sandbox' ? '_sb' : ''), token, payload),
-  reference: (token: string, kind: string, query = '') => {
+  /** Request-time lookups pass { retry: false, timeoutMs } so a slow FBR can't stall the page. */
+  reference: (token: string, kind: string, query = '', opts: { retry?: boolean; timeoutMs?: number } = {}) => {
     if (!Object.hasOwn(PATHS, kind) || ['post', 'validate', 'statl', 'regType'].includes(kind)) throw new Error('Unknown reference list');
-    return call('GET', PATHS[kind as PathKind] + query, token);
+    return call('GET', PATHS[kind as PathKind] + query, token, undefined, opts);
   },
   regType: (token: string, registrationNo: string) => call('POST', PATHS.regType, token, { Registration_No: registrationNo }),
   statl: (token: string, regno: string, date: string) => call('POST', PATHS.statl, token, { regno, date }),

@@ -39,6 +39,9 @@ const SCENARIO_BY_SALE_TYPE: Record<string, string> = {
   'non-adjustable supplies': 'SN025',
 };
 
+/** The sale types Rasid offers, lower case (rasid-web SALE_TYPES; checked by test/contract.test.ts). */
+export const KNOWN_SALE_TYPES = Object.keys(SCENARIO_BY_SALE_TYPE);
+
 export interface Seller { ntnCnic: string; name: string; province: string; address: string }
 
 export function toPayload(inv: InvoiceDto, seller: Seller): FbrInvoicePayload {

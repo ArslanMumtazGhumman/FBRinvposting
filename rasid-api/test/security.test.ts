@@ -48,6 +48,7 @@ const { ROUTERS } = await import('../src/app.js');
 const { closeDb } = await import('../src/db/client.js');
 const { closeQueue, enqueuePosts } = await import('../src/queue/posting.js');
 const { startPostWorker } = await import('../src/queue/worker.js');
+const { sealReferenceToken } = await import('../src/reference/token.js');
 const s = await import('../src/db/schema.js');
 
 const app = await startApp();
@@ -62,6 +63,9 @@ const TOKENS = {
   aProduction: 'alpha-production-token-1c8e4b7a2f9d3065',
   bSandbox: 'bravo-sandbox-token-9d2c6f1a8e3b5074',
 };
+/** Rasid's own PRAL token for reference lists (set by reference-cli in real deployments). */
+const REFERENCE_TOKEN = 'rasid-reference-token-4e8b1f6a9c2d7035';
+await tdb.admin.insert(s.referenceCredential).values(sealReferenceToken(REFERENCE_TOKEN));
 for (const [client, f, env, token] of [[a, A, 'sandbox', TOKENS.aSandbox], [a, A, 'production', TOKENS.aProduction], [b, B, 'sandbox', TOKENS.bSandbox]] as const) {
   assert.equal((await client.put(`/businesses/${f.businessId}/credentials/${env}`, { token })).status, 200);
 }
@@ -132,7 +136,8 @@ before(async () => { idsB = await seedData(b, B, 'B'); });
 describe('1. FBR tokens never leave the server', () => {
   test('no endpoint returns a token or its ciphertext, in the body or the headers', async () => {
     const creds = await tdb.admin.select().from(s.fbrCredentials);
-    const secrets = [...Object.values(TOKENS), ...creds.map(c => c.ciphertext)];
+    const [refCred] = await tdb.admin.select().from(s.referenceCredential);
+    const secrets = [...Object.values(TOKENS), REFERENCE_TOKEN, ...creds.map(c => c.ciphertext), refCred!.ciphertext];
     assert.equal(creds.length, 3);
     for (const c of creds) assert.ok(!Object.values(TOKENS).some(t => c.ciphertext.includes(t)), 'stored sealed, not plain');
 
@@ -172,7 +177,14 @@ describe('1. FBR tokens never leave the server', () => {
       ['GET /api/businesses/:businessId/import-mappings', () => a.get(`${base}/import-mappings`)],
       ['POST /api/businesses/:businessId/import-mappings', () => a.post(`${base}/import-mappings`, { name: 'Oct', signature: 'oct|sig', map: { invoiceNo: 'Bill #' } })],
       ['POST /api/fbr/:businessId/validate', () => a.post(`/fbr/${A.businessId}/validate`, { environment: 'sandbox', payload: fbrPayload })],
-      ['GET /api/fbr/:businessId/reference/:kind', () => a.get(`/fbr/${A.businessId}/reference/provinces`)],
+      ['GET /api/reference/provinces', () => a.get('/reference/provinces')],
+      ['GET /api/reference/uoms', () => a.get('/reference/uoms')],
+      ['GET /api/reference/sale-types', () => a.get('/reference/sale-types?province=Punjab')],
+      ['GET /api/reference/hs-codes', () => a.get('/reference/hs-codes?q=sugar')],
+      ['GET /api/reference/hs-codes/:code/uoms', () => a.get('/reference/hs-codes/1701.9910/uoms')],
+      ['GET /api/reference/sro-schedules', () => a.get('/reference/sro-schedules?rateId=280&province=Punjab')],
+      ['GET /api/reference/sro-items', () => a.get('/reference/sro-items?sroId=389')],
+      ['GET /api/reference/status', () => a.get('/reference/status')],
       ['POST /api/fbr/:businessId/reg-type', () => a.post(`/fbr/${A.businessId}/reg-type`, { Registration_No: '4410235' })],
       ['DELETE /api/businesses/:businessId/invoices/:id', async () => {
         const fresh = (await a.post(`${base}/invoices`, withBuyer('A to delete'))).body.id;
@@ -199,14 +211,19 @@ describe('1. FBR tokens never leave the server', () => {
   test('the token is only ever sent to FBR, as the bearer of the right business', () => {
     const used = new Set(seen.map(x => x.auth));
     assert.ok(used.has(`Bearer ${TOKENS.aSandbox}`) && used.has(`Bearer ${TOKENS.bSandbox}`));
-    assert.ok([...used].every(h => h === '' || Object.values(TOKENS).some(t => h === `Bearer ${t}`)), [...used].join(', '));
+    assert.ok([...used].every(h => h === '' || [...Object.values(TOKENS), REFERENCE_TOKEN].some(t => h === `Bearer ${t}`)), [...used].join(', '));
+    // Rasid's reference token only reads reference lists, and the reference endpoints never use a customer's token.
+    const refCalls = seen.filter(x => x.auth === `Bearer ${REFERENCE_TOKEN}`);
+    assert.ok(refCalls.length > 0 && refCalls.every(x => x.path.startsWith('/pdi/')), refCalls.map(x => x.path).join(', '));
+    assert.ok(!seen.some(x => /SaleTypeToRate|HS_UOM|SroSchedule|SROItem|uom/.test(x.path) && x.auth !== `Bearer ${REFERENCE_TOKEN}`));
   });
 
-  test('stored data holds no plaintext token: credentials, audit log, api_calls, invoices', async () => {
+  test('stored data holds no plaintext token: credentials, audit log, api_calls, invoices, reference cache', async () => {
     const dump = JSON.stringify(await Promise.all([
       tdb.admin.select().from(s.fbrCredentials), tdb.admin.select().from(s.auditLog), tdb.admin.select().from(s.apiCalls), tdb.admin.select().from(s.invoices),
+      tdb.admin.select().from(s.referenceCredential), tdb.admin.select().from(s.refLists),
     ]));
-    for (const t of Object.values(TOKENS)) assert.ok(!dump.includes(t));
+    for (const t of [...Object.values(TOKENS), REFERENCE_TOKEN]) assert.ok(!dump.includes(t));
     const hints = (await tdb.admin.select({ hint: s.fbrCredentials.hint }).from(s.fbrCredentials)).map(h => h.hint);
     assert.ok(hints.every(h => h.length <= 8), 'only a short hint is kept in clear');
   });

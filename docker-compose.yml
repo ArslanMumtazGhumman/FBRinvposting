@@ -4,6 +4,7 @@
 #   cp .env.example .env          # fill in the secrets (see the file)
 #   docker compose up -d --build  # migrate runs first, then api, worker and web
 #   docker compose run --rm migrate node dist/seed.js owner@company.pk "Owner Name" "a-strong-password" 1234567 "Company (Pvt) Ltd"
+#   docker compose run --rm migrate node dist/reference-cli.js set-token   # Rasid's PRAL token for reference lists (input hidden)
 #
 # Only web (8080) is published. Postgres and Redis are reachable on the internal network only.
 #
@@ -27,6 +28,7 @@ x-app: &app
     POST_WORKER_CONCURRENCY: ${POST_WORKER_CONCURRENCY:-12}
     POST_CONCURRENCY_PER_BUSINESS: ${POST_CONCURRENCY_PER_BUSINESS:-3}
     BATCH_POLL_MS: ${BATCH_POLL_MS:-1000}
+    REFERENCE_REFRESH_CRON: ${REFERENCE_REFRESH_CRON:-30 2 * * *}
   read_only: true
   tmpfs: ["/tmp"]
   security_opt: ["no-new-privileges:true"]

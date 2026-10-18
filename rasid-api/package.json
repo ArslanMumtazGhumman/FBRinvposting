@@ -16,6 +16,7 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "seed": "tsx src/seed.ts",
+    "reference": "tsx src/reference-cli.ts",
     "test": "tsx --test test/*.test.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/db/migrate.ts"

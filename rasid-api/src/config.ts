@@ -28,6 +28,8 @@ export const config = {
   postConcurrencyPerBusiness: Number(process.env.POST_CONCURRENCY_PER_BUSINESS ?? 3),
   /** How often a batch progress stream (SSE) checks for changes. */
   batchPollMs: Number(process.env.BATCH_POLL_MS ?? 1000),
+  /** When the worker refreshes PRAL reference lists (cron, Pakistan time). */
+  referenceRefreshCron: process.env.REFERENCE_REFRESH_CRON ?? '30 2 * * *',
 };
 
 if (config.vaultKeys[config.vaultActiveKey]?.length !== 32) {

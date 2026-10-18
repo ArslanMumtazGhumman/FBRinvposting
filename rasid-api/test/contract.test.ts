@@ -54,3 +54,13 @@ test("the worker's payload builder emits exactly those fields, and nothing else"
   const prod = toPayload({ ...inv, environment: 'production' } as InvoiceDto, { ntnCnic: '1234567', name: 'A', province: 'Punjab', address: 'L' });
   assert.equal('scenarioId' in prod, false);
 });
+
+test("the API's sale types (for PRAL rate lookups) are exactly rasid-web's SALE_TYPES", async () => {
+  const { KNOWN_SALE_TYPES } = await import('../src/lib/fbr-payload.js');
+  const ref = fs.readFileSync(fileURLToPath(new URL('../../rasid-web/src/app/core/fbr-reference.ts', import.meta.url)), 'utf8');
+  const block = /export const SALE_TYPES[^=]*= \[([\s\S]*?)\n\];/.exec(ref)?.[1];
+  assert.ok(block, 'SALE_TYPES not found in fbr-reference.ts');
+  const web = [...block.matchAll(/name: '([^']+)'/g)].map(m => m[1]!.toLowerCase()).sort();
+  assert.equal(web.length, 24);
+  assert.deepEqual([...KNOWN_SALE_TYPES].sort(), web);
+});

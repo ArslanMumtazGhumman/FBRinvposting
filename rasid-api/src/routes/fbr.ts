@@ -1,12 +1,13 @@
 /**
- * FBR gateway: validate, reference lists and buyer checks, called during the
- * request. Posting goes through the queue (routes/posting.ts, queue/worker.ts).
+ * FBR gateway: validate and buyer checks, called during the
+ * request. Posting goes through the queue (routes/posting.ts, queue/worker.ts);
+ * reference lists are served from the cache (routes/reference.ts).
  * No transaction is held open across an FBR call.
  */
 import { eq } from 'drizzle-orm';
 import { Router, type Request, type Response } from 'express';
 import { requireAuth, requireBusiness, requireRole } from '../lib/auth.js';
-import { fbr, FbrHttpError, type FbrJson } from '../lib/fbr-client.js';
+import { fbr, FbrHttpError } from '../lib/fbr-client.js';
 import { parse } from '../lib/http.js';
 import { FbrCallBody, RegTypeBody } from '../schemas/auth.js';
 import { withBusiness } from '../db/client.js';
@@ -16,7 +17,6 @@ import { loadToken } from './credentials.js';
 
 type Params = { businessId: string };
 type Req = Request<Params>;
-type KindParams = Params & { kind: string };
 
 export const fbrRoutes = Router({ mergeParams: true });
 
@@ -52,26 +52,6 @@ fbrRoutes.post<Params>('/validate', requireAuth, requireBusiness, requireRole('o
     const r = await fbr.validate(ctx.token, ctx.env, payload);
     res.json(r.json);
   } catch (e) { res.status(statusOf(e) === 401 ? 401 : 503).json({ message: messageOf(e) }); }
-});
-
-const REF_CACHE = new Map<string, { at: number; json: FbrJson }>(); // kind+query -> { at, json }
-const REF_TTL_MS = 12 * 3600e3;
-
-fbrRoutes.get<KindParams>('/reference/:kind', requireAuth, requireBusiness, async (req, res) => {
-  const token = await anyToken(req);
-  if (!token) return res.status(401).json({ message: 'Add an FBR token first.' });
-  const q = new URLSearchParams(Object.entries(req.query).map(([k, v]): [string, string] => [k, String(v)])).toString();
-  const cacheKey = `${req.params.kind}?${q}`;
-  const hit = REF_CACHE.get(cacheKey);
-  if (hit && Date.now() - hit.at < REF_TTL_MS) return res.json(hit.json);
-  try {
-    const r = await fbr.reference(token, req.params.kind, q ? `?${q}` : '');
-    REF_CACHE.set(cacheKey, { at: Date.now(), json: r.json });
-    res.set('Cache-Control', 'private, max-age=3600').json(r.json);
-  } catch (e) {
-    if (hit) return res.json(hit.json); // serve stale when FBR is down
-    res.status(messageOf(e) === 'Unknown reference list' ? 404 : 503).json({ message: messageOf(e) });
-  }
 });
 
 fbrRoutes.post<Params>('/reg-type', requireAuth, requireBusiness, async (req, res) => {
