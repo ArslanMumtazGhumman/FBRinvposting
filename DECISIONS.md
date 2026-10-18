@@ -236,7 +236,8 @@ Choices made where the brief left room. Simpler option first; revisit if it hurt
   `rasid-web/src/app/core/models.ts`. It fails if the API's zod schema or the worker's payload builder drifts from those names.
 - **One timing assertion relaxed.** The posting test's "exactly 3 in flight" became "at most 3, and at least 2". On a
   loaded machine, three jobs don't always overlap within one fake FBR call; the guarantee is the upper bound.
-- **Not changed: `xlsx` 0.18.5 has npm audit advisories (prototype pollution, ReDoS) with no npm fix.** SheetJS
-  publishes fixed versions (0.20.x) only from cdn.sheetjs.com, so `npm audit --omit=dev --audit-level=high`
-  in CI fails. This predates milestone 1. The fix is to depend on the SheetJS tarball URL. That changes where a dependency comes
-  from, so it is left for a decision. The parser runs only in the user's browser, in a Web Worker, on files they chose.
+- **`xlsx` now comes from SheetJS's own CDN: 0.20.3, the current release.**
+  - Why: 0.18.5 from npm had high-severity advisories (prototype pollution, ReDoS) and failed CI's `npm audit --omit=dev --audit-level=high`. SheetJS no longer publishes to npm, and fixed versions exist only at cdn.sheetjs.com.
+  - How it's pinned: `package.json` points at `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`, and `package-lock.json` keeps that tarball's sha512 integrity hash, so `npm ci` (CI and the Docker build) rejects a changed file.
+  - Upgrading: change the URL; `npm outdated` won't report new SheetJS releases.
+  - Checked with web tests (real XLSX round-trip), the production and Docker builds, and the browser e2e (sheet parsed in the Web Worker, offline and against the API). Audit: 0 vulnerabilities.
