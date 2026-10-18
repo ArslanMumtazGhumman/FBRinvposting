@@ -32,6 +32,8 @@ cp .env.example .env            # fill the three passwords, VAULT_KEY_V1 and SES
 docker compose up -d --build    # postgres, redis → migrate (one-off) → api, worker → web on http://localhost:8080
 docker compose run --rm migrate node dist/seed.js owner@company.pk "Owner Name" "a-strong-password" 1234567 "Company (Pvt) Ltd"
 #   → prints a TOTP secret: add it to Google Authenticator / Authy
+docker compose run --rm migrate node dist/reference-cli.js set-token
+#   → paste Rasid's own PRAL token (input hidden): the worker caches FBR's reference lists with it, nightly
 ```
 
 | Service | What it does |
@@ -40,7 +42,7 @@ docker compose run --rm migrate node dist/seed.js owner@company.pk "Owner Name" 
 | `redis` | Redis 7 for the posting queue: password, append-only file, `noeviction`, volume `redis-data`. Not published. |
 | `migrate` | Runs once per `up`: applies migrations as the table owner and creates the API login role. Also runs `seed`. |
 | `api` | The API, as the RLS-bound login role. Never sees the table owner's password. |
-| `worker` | Same image, `node dist/worker.js`: posts queued invoices to FBR. `docker compose up -d --scale worker=2` adds more; still 3 per business in total. |
+| `worker` | Same image, `node dist/worker.js`: posts queued invoices to FBR and refreshes PRAL reference lists nightly. `docker compose up -d --scale worker=2` adds more; still 3 per business in total, one refresh per night. |
 | `web` | nginx: the Angular build plus `/api` proxy (20 MB body limit on bulk import only, unbuffered SSE). |
 
 Upgrading: `docker compose up -d --build` rebuilds, runs `migrate`, then restarts `api` and `worker`. Stopping the worker
@@ -57,8 +59,8 @@ Then in the app: Settings → FBR connection → paste the sandbox token from IR
 
 | Where | Command | What |
 | --- | --- | --- |
-| `rasid-web` | `npx ng test --watch=false` | Vitest: `tax.ts` (rates, line maths, FBR rule checks, payload), `smart-mapper.ts` on the sample sheet (header matching, DD/MM/YYYY dates, NTN cleanup, row grouping), `ApiStoreService`, `PostingService` |
-| `rasid-api` | `npm test` | node:test against Postgres 16 and Redis 7 in Testcontainers (needs Docker): RLS and audit chain, every endpoint, the posting queue, and `security.test.ts` (no endpoint returns a token, tenant isolation on every route, idempotent posting) |
+| `rasid-web` | `npx ng test --watch=false` | Vitest: `tax.ts` (rates, line maths, FBR rule checks, payload), `smart-mapper.ts` on the sample sheet (header matching, DD/MM/YYYY dates, NTN cleanup, row grouping), `ApiStoreService`, `PostingService`, `ReferenceService` |
+| `rasid-api` | `npm test` | node:test against Postgres 16 and Redis 7 in Testcontainers (needs Docker): RLS and audit chain, every endpoint, the posting queue, the reference cache against a fake PRAL (`reference.test.ts`), and `security.test.ts` (no endpoint returns a token, tenant isolation on every route, idempotent posting) |
 
 ## API development
 
@@ -96,9 +98,29 @@ header on writes. Every body is validated with zod (`rasid-api/src/schemas`); a 
 | `PUT /credentials/:env`, `POST /credentials/:env/test` | Tokens are write-only |
 | `POST /api/businesses`, `PUT /api/businesses/:businessId` | Add a business (tenant owners; you become its owner) / update profile and defaults (business owners) |
 
-FBR lookups stay synchronous under `/api/fbr/:businessId`: `POST /validate`, `GET /reference/:kind`,
-`POST /reg-type`. Posting happens only in the worker (`node dist/worker.js`): at most 3 FBR calls in
-flight per business, a timed-out post becomes `outcome_unknown` and is never retried automatically.
+FBR checks stay synchronous under `/api/fbr/:businessId`: `POST /validate`, `POST /reg-type`. Posting
+happens only in the worker (`node dist/worker.js`): at most 3 FBR calls in flight per business, a timed-out
+post becomes `outcome_unknown` and is never retried automatically.
+
+### Reference data
+
+PRAL's reference lists are the same for every tenant, so they live under `/api/reference` (any signed-in
+user, no business). They're served from Postgres, filled nightly by the worker with Rasid's own PRAL token
+(`reference-cli set-token`), never a customer's. On a miss the API asks PRAL live (5 s, no retries) and caches
+the answer. `source: "none"` means there's no PRAL copy yet, and the web app falls back to its bundled lists.
+
+| Route | Notes |
+| --- | --- |
+| `GET /sale-types?province=Punjab&date=YYYY-MM-DD` | PRAL rates per Rasid sale type for the seller's province (`date` defaults to today in Pakistan) |
+| `GET /hs-codes?q=sugar&limit=20` | HS search: code prefix (`1701`, `1701.99`, `170199`) or all words in the description |
+| `GET /hs-codes/:code/uoms` | Units FBR accepts for an HS code (`HS_UOM`) |
+| `GET /sro-schedules?rateId&province&date`, `GET /sro-items?sroId&date` | SRO schedules for a PRAL rate, items of a schedule |
+| `GET /provinces`, `GET /uoms` | As PRAL lists them, with PRAL's codes |
+| `GET /status` | Cache freshness per list, and whether the reference token is set (never the token) |
+
+Operators: `node dist/reference-cli.js set-token | clear-token | refresh [YYYY-MM-DD] | status` (in compose:
+`docker compose run --rm migrate node dist/reference-cli.js …`). The schedule is `REFERENCE_REFRESH_CRON`
+(default `30 2 * * *`, Pakistan time).
 
 ## What is where
 
@@ -106,7 +128,8 @@ flight per business, a timed-out post becomes `outcome_unknown` and is never ret
 | --- | --- |
 | FBR payload types (exact v1.12 field names) | `rasid-web/src/app/core/models.ts` |
 | Tax calculation, client-side FBR rule checks, payload builder | `rasid-web/src/app/core/tax.ts` |
-| Reference data, sale types, 28 scenarios, activity×sector matrix, error help | `rasid-web/src/app/core/fbr-reference.ts` |
+| Sale types, 28 scenarios, activity×sector matrix, error help; offline fallback lists | `rasid-web/src/app/core/fbr-reference.ts` |
+| Live PRAL rates, units, HS search, HS→UOM, SRO suggestions in the forms | `rasid-web/src/app/core/reference.service.ts` |
 | Smart column matching (synonyms + content sniffing), date/UOM/province normalising, row grouping | `rasid-web/src/app/core/import/smart-mapper.ts` |
 | Excel parsing off the main thread | `rasid-web/src/app/core/import/excel.worker.ts` |
 | Client state: one `Store` contract, offline (`StoreService`, localStorage) or API-backed (`ApiStoreService`) | `rasid-web/src/app/core/store.ts`, `store.service.ts`, `api-store.service.ts` |
@@ -115,7 +138,8 @@ flight per business, a timed-out post becomes `outcome_unknown` and is never ret
 | Token vault (AES-256-GCM, key versions, AAD = business) | `rasid-api/src/lib/vault.ts` |
 | Login, scrypt, TOTP, lockout, cookie session, CSRF | `rasid-api/src/lib/auth.ts` |
 | PRAL client (sandbox `_sb` routing, timeouts, safe retry) | `rasid-api/src/lib/fbr-client.ts` |
-| FBR validate, reference cache, seller-NTN guard | `rasid-api/src/routes/fbr.ts` |
+| FBR validate, buyer registration check, seller-NTN guard | `rasid-api/src/routes/fbr.ts` |
+| PRAL reference cache: nightly refresh, lookups, HS search, Rasid's reference token | `rasid-api/src/reference/`, `rasid-api/src/queue/reference.ts`, `rasid-api/src/routes/reference.ts`, `rasid-api/src/reference-cli.ts` |
 | Queue for posting, batch progress (SSE) | `rasid-api/src/routes/posting.ts`, `rasid-api/src/repos/posting.ts` |
 | Posting worker (BullMQ): idempotency, outcome-unknown handling | `rasid-api/src/queue/worker.ts` |
 | 3-per-business FBR concurrency across workers | `rasid-api/src/queue/slots.ts` |
@@ -138,8 +162,10 @@ flight per business, a timed-out post becomes `outcome_unknown` and is never ret
   switching `VAULT_ACTIVE_KEY`.
 - **FBR logo:** the invoice print view has a placeholder box. Use the official Digital Invoicing System
   image supplied by PRAL (spec section 6). QR is version 2 at 1 × 1 inch, as specified.
-- **Rates:** default rates per sale type in `fbr-reference.ts` are illustrative. Load live rates from
-  `/pdi/v2/SaleTypeToRate` and confirm the further-tax rate with a tax adviser.
+- **Rates:** set Rasid's reference token (`reference-cli set-token`) so rates, units and HS codes come from PRAL;
+  without it the bundled, illustrative rates in `fbr-reference.ts` are shown. Run `reference-cli refresh` then
+  `status` once with the real token: the PRAL response shapes are tested against a fake, not the live sandbox.
+  Confirm the further-tax rate with a tax adviser.
 - **Timeouts on post:** FBR offers no idempotency or lookup, so a post that times out is reported as
   "outcome unknown" (never auto-retried) and the user is told to check IRIS first.
 - **Angular 22:** this project targets Angular 21 because 22 needs Node ≥ 22.22.3. Run

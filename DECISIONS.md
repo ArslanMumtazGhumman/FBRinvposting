@@ -241,3 +241,64 @@ Choices made where the brief left room. Simpler option first; revisit if it hurt
   - How it's pinned: `package.json` points at `https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz`, and `package-lock.json` keeps that tarball's sha512 integrity hash, so `npm ci` (CI and the Docker build) rejects a changed file.
   - Upgrading: change the URL; `npm outdated` won't report new SheetJS releases.
   - Checked with web tests (real XLSX round-trip), the production and Docker builds, and the browser e2e (sheet parsed in the Web Worker, offline and against the API). Audit: 0 vulnerabilities.
+
+## Milestone 2
+
+### Live reference data
+- **Rasid uses its own PRAL token for reference lists, never a customer's.** Reference lists are the same for
+  every taxpayer, and FBR attributes calls to the token's owner. The token is stored like customer tokens:
+  sealed with the vault (AAD `platform:reference`) in `reference_credential`. The table owner writes it with
+  `node dist/reference-cli.js set-token`, which reads stdin (hidden at a terminal), checks the token against
+  FBR before saving, and audits the change. The API role can only read the ciphertext. An environment variable
+  would have been simpler, but it's plaintext on disk, which the brief rules out.
+- **Without that token nothing breaks.** The endpoints answer `source: "none"` and the web app uses its bundled
+  lists, as before. The worker logs a skipped refresh.
+- **Cache in Postgres, not Redis:** `ref_lists` holds PRAL's responses as returned (jsonb, keyed by kind, query
+  without the date, and the date asked for). `hs_codes` holds `itemdesccode` as rows for search. Both are shared
+  by every tenant, so there's no RLS. The API role can write them, because lookups cache what they fetch.
+- **Nightly job = a BullMQ job scheduler** in the worker (`REFERENCE_REFRESH_CRON`, default 02:30
+  Asia/Karachi). The scheduler adds one job per tick however many workers run. A worker that starts with an
+  empty cache queues a one-off fill (fixed job id, so workers starting together queue it once).
+- **What the night fetches:**
+  - provinces, uom, transtypecode, itemdesccode.
+  - SaleTypeToRate for each of Rasid's 24 sale types × each province, for that day.
+  - SroSchedule for every rate found, then SROItem for every schedule.
+  - HS_UOM only for HS codes someone has looked up. It's one call per code, and there are ~12k codes.
+  - About 200–400 calls, 4 at a time.
+- **Bad answers don't replace good data.** An empty list is a failure, and so is an HS list less than half the
+  cached size. In both cases the cached copy stays. Each list is stored on its own, so one failure doesn't stop
+  the rest. A 401 stops the run.
+- **Dated copies are kept 35 days** (pruned by the refresh), so backdated invoices can still find the rates of their date.
+- **Lookups: cache, then live, then nearest date.** On a miss, the API fetches from PRAL with the reference token,
+  with a 5 s timeout and no retries (a slow FBR can't stall the editor), and caches the answer. If that fails,
+  dated lists use the nearest earlier cached date (or the newest), and the response carries `asOf`. A failed live
+  fetch isn't repeated for a minute per list and API process.
+- **Sale type → PRAL transaction type is matched on letters and digits** of the description, case-insensitively
+  ("Processing/ Conversion of Goods" = "Processing/Conversion of Goods"). Rasid sale types PRAL doesn't list are
+  left out of the response, and the web app keeps their bundled rates. The API's list of sale types is
+  `KNOWN_SALE_TYPES` (`fbr-payload.ts`). A contract test checks that it equals rasid-web's `SALE_TYPES`.
+- **PRAL field names are read case-insensitively** (`hS_CODE`, `ratE_DESC` …, spec v1.12 section 5), so a
+  casing change on PRAL's side doesn't empty a list. The shapes are checked against a fake PRAL in tests, not the
+  live sandbox; check them once with a real token (`reference-cli refresh`, then `status`).
+- **Province names stay as Rasid stores them** ("Punjab"); PRAL's codes are matched by name ("PUNJAB"). The web
+  app keeps its seven names and doesn't replace them with PRAL's capitalised ones, so existing customers and
+  checks stay valid.
+- **The old `GET /api/fbr/:businessId/reference/:kind` proxy is removed.** It used the customer's token and
+  cached in process memory. Nothing in the web app called it.
+- **HS search** (`GET /api/reference/hs-codes?q=`): digits match the start of the code, with or without the dot;
+  words must all appear in the description. Code matches come first. It's a plain `ILIKE` over ~12k rows, with no
+  trigram index; add one if it shows up in latency.
+- **Web: `ReferenceService`, lazily loaded.** Rates and the UOM list load the first time a form reads them, for the
+  active business's province and today's date. They load again when the business, its province or the day changes.
+  `PostingService` only reads HS→UOM rules it already has, so it never triggers requests.
+  - Rates are for today, not each invoice's date. Rates rarely change, and FBR's validate is the final check.
+  - HS→UOM rules are fetched when an HS code is entered in the editor or picked on the products page.
+    `validateInvoice` uses them: 0096 when one unit is allowed, 0099 when there are several. Bulk import still
+    checks only the bundled rule, so it doesn't make one request per HS code in a large sheet.
+- **`SaleTypeDef.rates` is renamed `offlineRates`,** so nothing can read a hard-coded rate by accident. Scenario,
+  retail-price and exempt flags stay in `fbr-reference.ts`, because PRAL's lists don't carry them.
+- **A new invoice moves to PRAL's default rate when the rates arrive** after it was set up (reload straight onto
+  `/invoices/new`). This happens once, when the rates load, so a rate the user then picks is left alone. Existing
+  drafts are never changed.
+- **SRO fields get suggestions, not a picker.** Schedules (for a PRAL rate) and their items fill `<datalist>`s when
+  the field gets focus. Free text still works, because FBR's SRO numbering has odd cases.
