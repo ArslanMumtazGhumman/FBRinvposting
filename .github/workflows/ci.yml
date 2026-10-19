@@ -13,6 +13,11 @@ jobs:
       - run: npm ci
       - run: npx ng test --watch=false
       - run: npx ng build --configuration production
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with: { name: playwright-traces, path: rasid-web/test-results, retention-days: 7 }
       - run: npm audit --omit=dev --audit-level=high
   api:
     runs-on: ubuntu-latest

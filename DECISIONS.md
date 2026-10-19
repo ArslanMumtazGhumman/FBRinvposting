@@ -430,3 +430,21 @@ confirm every row that still has `needs_review`. These rows are uncertain on the
   (`businesses.further_tax_rate DEFAULT 4`). Confirm the rate in force, and whether it differs by buyer or sector,
   and change both places. Businesses that already exist keep the rate they store.
 
+### Step 5: tests
+- **Unit tests** (Vitest) cover `parseRate` for every rate format seen or typed, unreadable text, and unit
+  conversion. They cover `computeLine` for standard, reduced, exempt, zero-rated, 3rd schedule (retail price),
+  per-unit rates, PRAL's numeric value, and further tax for unregistered buyers on the invoice date. The rest:
+  `ReferenceService` (per-date rates, `checkHs`, the checks 0052/0099/0046), the 24 h cache across a reload,
+  and the type-ahead (debounce, overlay, keyboard).
+- **API tests** check that the refresh keeps every cached list when FBR answers 500 or `[]`. They also check
+  12 h expiry with the stale copy served on failure, HS search (`q=sugar` returns the sugar codes; `q=1701`
+  returns 1701.9910), the customer-token fallback, `hs-check`, and the sale-type mapping.
+- **Playwright 1.63.0** (pinned, released 2026-09-04). The brief's test needs the rates-from-API path, which exists
+  only in API mode. So the `api` project runs the production build with the API faked by `page.route`
+  (`e2e/fake-api.ts`). The fake serves PRAL data that differs from the bundled lists (a 7.5% reduced rate), so the
+  test proves the app used the API, and it plays the posting gateway. A real backend would need Postgres, Redis, the
+  worker and a fake PRAL for one browser test. The API side of the same path is covered by the API tests. A second
+  project, `offline`, runs the `npm start` development build (simulator, no API calls), so the offline demo is checked
+  in a browser too. Both ran 5 times in a row without a failure. CI installs Chromium and runs `npm run e2e` in the
+  web job, and uploads traces when a test fails.
+

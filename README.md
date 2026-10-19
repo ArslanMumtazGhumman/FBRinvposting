@@ -59,7 +59,8 @@ Then in the app: Settings → FBR connection → paste the sandbox token from IR
 
 | Where | Command | What |
 | --- | --- | --- |
-| `rasid-web` | `npx ng test --watch=false` | Vitest: `tax.ts` (rates, line maths, FBR rule checks, payload), `smart-mapper.ts` on the sample sheet (header matching, DD/MM/YYYY dates, NTN cleanup, row grouping), `ApiStoreService`, `PostingService`, `ReferenceService` |
+| `rasid-web` | `npx ng test --watch=false` | Vitest: `rate.ts` (every rate format), `tax.ts` (line maths for standard, reduced, exempt, zero-rated, 3rd schedule, per-unit rates and further tax; FBR rule checks; payload), `smart-mapper.ts` on the sample sheet (header matching, DD/MM/YYYY dates, NTN cleanup, row grouping), `ApiStoreService`, `PostingService`, `ReferenceService` and its 24 h cache, the HS type-ahead |
+| `rasid-web` | `npm run e2e` | Playwright (Chromium; once: `npx playwright install chromium`). `api`: the production build against a faked API. It creates an invoice with the HS type-ahead, PRAL units, rates and SRO dropdowns, then posts it. `offline`: the `npm start` demo, signing in, searching the sample and posting to the in-browser simulator |
 | `rasid-api` | `npm test` | node:test against Postgres 16 and Redis 7 in Testcontainers (needs Docker): RLS and audit chain, every endpoint, the posting queue, the reference cache against a fake PRAL (`reference.test.ts`), and `security.test.ts` (no endpoint returns a token, tenant isolation on every route, idempotent posting) |
 
 ## API development
