@@ -245,7 +245,7 @@ Choices made where the brief left room. Simpler option first; revisit if it hurt
 ## Milestone 2
 
 ### Live reference data
-- **Rasid uses its own PRAL token for reference lists, never a customer's.** Reference lists are the same for
+- **Rasid uses its own PRAL token for reference lists, never a customer's.** (Step 1 below adds a customer's tested token as the fallback.) Reference lists are the same for
   every taxpayer, and FBR attributes calls to the token's owner. The token is stored like customer tokens:
   sealed with the vault (AAD `platform:reference`) in `reference_credential`. The table owner writes it with
   `node dist/reference-cli.js set-token`, which reads stdin (hidden at a terminal), checks the token against
@@ -256,7 +256,7 @@ Choices made where the brief left room. Simpler option first; revisit if it hurt
 - **Cache in Postgres, not Redis:** `ref_lists` holds PRAL's responses as returned (jsonb, keyed by kind, query
   without the date, and the date asked for). `hs_codes` holds `itemdesccode` as rows for search. Both are shared
   by every tenant, so there's no RLS. The API role can write them, because lookups cache what they fetch.
-- **Nightly job = a BullMQ job scheduler** in the worker (`REFERENCE_REFRESH_CRON`, default 02:30
+- **Nightly job = a BullMQ job scheduler** in the worker (`REFERENCE_REFRESH_CRON`, default 02:00 since step 1 below, was 02:30
   Asia/Karachi). The scheduler adds one job per tick however many workers run. A worker that starts with an
   empty cache queues a one-off fill (fixed job id, so workers starting together queue it once).
 - **What the night fetches:**
@@ -285,7 +285,7 @@ Choices made where the brief left room. Simpler option first; revisit if it hurt
   checks stay valid.
 - **The old `GET /api/fbr/:businessId/reference/:kind` proxy is removed.** It used the customer's token and
   cached in process memory. Nothing in the web app called it.
-- **HS search** (`GET /api/reference/hs-codes?q=`): digits match the start of the code, with or without the dot;
+- **HS search** (replaced by `tsvector` in step 1 below) (`GET /api/reference/hs-codes?q=`): digits match the start of the code, with or without the dot;
   words must all appear in the description. Code matches come first. It's a plain `ILIKE` over ~12k rows, with no
   trigram index; add one if it shows up in latency.
 - **Web: `ReferenceService`, lazily loaded.** Rates and the UOM list load the first time a form reads them, for the
@@ -302,3 +302,40 @@ Choices made where the brief left room. Simpler option first; revisit if it hurt
   drafts are never changed.
 - **SRO fields get suggestions, not a picker.** Schedules (for a PRAL rate) and their items fill `<datalist>`s when
   the field gets focus. Free text still works, because FBR's SRO numbering has odd cases.
+
+### Step 1: reference cache, revisited against the brief
+The first pass above was built before the milestone brief was checked line by line. This step closes the gaps in
+the brief's step 1. Where the brief and the first pass disagreed, the choices below were confirmed with the product owner.
+- **Token: Rasid's own first, a customer's as fallback.** The brief asked for "any business's valid token,
+  production preferred". The first pass used only Rasid's token. Now `referenceToken()` (`reference/token.ts`)
+  returns Rasid's token if set. Otherwise it returns one customer token whose last test passed (`last_ok_at`),
+  production first, then the most recently tested. "Valid" means tested: a token that was saved but never tested
+  isn't used. RLS stops the API role reading another tenant's credentials, so a `SECURITY DEFINER` function
+  `reference_fallback_credential()` returns that one row. It returns only the ciphertext, which opens only with the
+  original business's AAD. A 401 from FBR clears that token's `last_ok_at` (`reference_fallback_rejected()`), so
+  it stops being a fallback until its owner tests it again. The token never reaches the browser. FBR attributes these
+  calls to the customer, which is why Rasid's own token comes first. The legal opinion in the README covers this.
+- **Tables kept, not renamed.** The brief's `reference_data(kind, key, payload, fetched_at, source_env)` is
+  `ref_lists(kind, params, as_of, data, fetched_at, source_env)`: `params` + `as_of` is the key, so dated lists
+  keep one row per date. HS codes stay in their own `hs_codes` table because they're searched. Both gained
+  `source_env`: `platform` (Rasid's token), `production` or `sandbox` (a customer's).
+- **Two more lists:** `doctypecode` and `sroitemcode` are fetched nightly and served from `GET …/reference/:kind`.
+  `itemdesccode` isn't served whole (~12k rows); it's searched.
+- **12 h expiry for parameterised lookups** (SaleTypeToRate, HS_UOM, SroSchedule, SROItem; `REFERENCE_TTL_HOURS`).
+  An older copy is fetched again on request. If that fails, the old copy is still served: stale rates beat none,
+  and FBR's validate is the final check. Lists without parameters change only with the nightly refresh.
+- **An empty answer never replaces a non-empty copy**, in the refresh or in a lookup (`writeList` updates only
+  when the new list has rows or the cached one has none). The first fetch of a list that really is empty is
+  still stored. Each list FBR fails or empties is logged as a warning (`reference_list_kept`,
+  `reference_lookup_failed`, `reference_empty_kept`).
+- **Routes moved under the business,** `/api/businesses/:businessId/reference/…`, as briefed: `/rates`, `/hs`,
+  `/uom-for-hs`, `/sro`, `/sro-items`, `/status` and `/:kind`. `province` and `date` are optional and default to
+  the business's province and today in Pakistan. `/rates` without `saleType` returns every sale type, which is
+  what the web app loads. The old `/api/reference/*` routes are gone. All are GET only.
+- **HS search uses `tsvector`.** `hs_codes.search` is a generated `to_tsvector('simple', code || ' ' || description)`
+  with a GIN index. The `simple` config means no stemming: PRAL's descriptions are tariff text, and English stemming
+  would only blur trade terms. Each word is matched as a prefix (`sug` finds SUGAR). Only letters and digits are
+  passed to `to_tsquery`. A query of digits (dots ignored) matches the start of the code, using an index on
+  `replace(code, '.', '') text_pattern_ops`. The default limit is 20, the maximum 50.
+- **The refresh takes `retry`** (default true), so tests can check a 500 without fbr-client's 15 s back-off.
+

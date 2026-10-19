@@ -30,11 +30,11 @@ describe('ReferenceService with the API', () => {
     ],
   };
 
-  async function loaded(sale: object = RATES, uoms: object = { source: 'pral', uoms: [{ id: 13, description: 'KG' }, { id: 99, description: 'KWH' }] }) {
+  async function loaded(sale: object = RATES, uoms: object = { source: 'pral', items: [{ id: 13, description: 'KG' }, { id: 99, description: 'KWH' }] }) {
     await signedIn(http, store);
     ref.rates('Goods at Reduced Rate'); // first read starts the load
-    (await next(http, `/api/reference/sale-types?province=Punjab&date=${todayIso()}`)).flush(sale);
-    (await next(http, '/api/reference/uoms')).flush(uoms);
+    (await next(http, `/api/businesses/b1/reference/rates?province=Punjab&date=${todayIso()}`)).flush(sale);
+    (await next(http, '/api/businesses/b1/reference/uom')).flush(uoms);
     await vi.waitFor(() => expect(ref.uoms()).not.toContain('Dozen'));
   }
 
@@ -54,8 +54,8 @@ describe('ReferenceService with the API', () => {
   it('source "none" (no PRAL copy on the server) keeps the bundled lists', async () => {
     await signedIn(http, store);
     ref.uoms();
-    (await next(http, `/api/reference/sale-types?province=Punjab&date=${todayIso()}`)).flush({ source: 'none', saleTypes: [] });
-    (await next(http, '/api/reference/uoms')).flush({ source: 'none', uoms: [] });
+    (await next(http, `/api/businesses/b1/reference/rates?province=Punjab&date=${todayIso()}`)).flush({ source: 'none', saleTypes: [] });
+    (await next(http, '/api/businesses/b1/reference/uom')).flush({ source: 'none', items: [] });
     await Promise.resolve();
     expect(ref.rates('Goods at Reduced Rate')).toEqual(['1%', '5%', '10%', '12%', '15%', '16%']);
     expect(ref.ratesAsOf()).toBeNull();
@@ -66,31 +66,33 @@ describe('ReferenceService with the API', () => {
     await loaded();
     store.businesses.update(bs => bs.map(b => ({ ...b, province: 'Sindh' })));
     ref.rates('Goods at Reduced Rate');
-    (await next(http, `/api/reference/sale-types?province=Sindh&date=${todayIso()}`)).flush({ ...RATES, saleTypes: [{ ...RATES.saleTypes[0], rates: [{ id: 300, desc: '12%', value: 12 }] }] });
-    (await next(http, '/api/reference/uoms')).flush({ source: 'pral', uoms: [{ id: 13, description: 'KG' }] });
+    (await next(http, `/api/businesses/b1/reference/rates?province=Sindh&date=${todayIso()}`)).flush({ ...RATES, saleTypes: [{ ...RATES.saleTypes[0], rates: [{ id: 300, desc: '12%', value: 12 }] }] });
+    (await next(http, '/api/businesses/b1/reference/uom')).flush({ source: 'pral', items: [{ id: 13, description: 'KG' }] });
     await vi.waitFor(() => expect(ref.rates('Goods at Reduced Rate')).toEqual(['12%']));
   });
 
   it('HS search uses the API, and the bundled sample when the API has no copy or fails', async () => {
+    await signedIn(http, store); // reference routes are scoped to the active business
     const search = ref.searchHs('sugar');
-    (await next(http, '/api/reference/hs-codes?q=sugar&limit=20')).flush({ source: 'pral', results: [{ code: '1701.1400', description: 'Cane sugar, raw' }] });
+    (await next(http, '/api/businesses/b1/reference/hs?q=sugar&limit=20')).flush({ source: 'pral', results: [{ code: '1701.1400', description: 'Cane sugar, raw' }] });
     expect(await search).toEqual([{ code: '1701.1400', desc: 'Cane sugar, raw' }]);
 
     const none = ref.searchHs('1701');
-    (await next(http, '/api/reference/hs-codes?q=1701&limit=20')).flush({ source: 'none', results: [] });
+    (await next(http, '/api/businesses/b1/reference/hs?q=1701&limit=20')).flush({ source: 'none', results: [] });
     expect((await none).map(h => h.code)).toEqual(['1701.9910']);
 
     const down = ref.searchHs('rice');
-    (await next(http, '/api/reference/hs-codes?q=rice&limit=20')).flush({ message: 'down' }, { status: 503, statusText: 'Unavailable' });
+    (await next(http, '/api/businesses/b1/reference/hs?q=rice&limit=20')).flush({ message: 'down' }, { status: 503, statusText: 'Unavailable' });
     expect((await down).map(h => h.code)).toEqual(['1006.3090']);
 
     expect(await ref.searchHs('s')).toEqual([]); // too short: no request
   });
 
   it('HS→UOM is asked once per code and then used by allowedUoms', async () => {
+    await signedIn(http, store);
     expect(ref.allowedUoms('1701.9910')).toBeUndefined();
     const [a, b] = [ref.hsUoms('1701.9910'), ref.hsUoms('1701.9910')];
-    (await next(http, '/api/reference/hs-codes/1701.9910/uoms')).flush({ source: 'pral', uoms: ['KG', 'Ton'] });
+    (await next(http, '/api/businesses/b1/reference/uom-for-hs?hs=1701.9910')).flush({ source: 'pral', uoms: ['KG', 'Ton'] });
     expect(await a).toEqual(['KG', 'Ton']);
     expect(await b).toEqual(['KG', 'Ton']);
     expect(ref.allowedUoms('1701.9910')).toEqual(['KG', 'Ton']);
@@ -99,15 +101,16 @@ describe('ReferenceService with the API', () => {
   });
 
   it('HS→UOM: no PRAL rule falls back to the bundled one; a failed request is tried again later', async () => {
+    await signedIn(http, store);
     const kwh = ref.hsUoms('2716.0000');
-    (await next(http, '/api/reference/hs-codes/2716.0000/uoms')).flush({ source: 'none', uoms: [] });
+    (await next(http, '/api/businesses/b1/reference/uom-for-hs?hs=2716.0000')).flush({ source: 'none', uoms: [] });
     expect(await kwh).toEqual(['KWH']);
 
     const failed = ref.hsUoms('8471.3020');
-    (await next(http, '/api/reference/hs-codes/8471.3020/uoms')).flush({}, { status: 503, statusText: 'Unavailable' });
+    (await next(http, '/api/businesses/b1/reference/uom-for-hs?hs=8471.3020')).flush({}, { status: 503, statusText: 'Unavailable' });
     expect(await failed).toBeNull();
     const retry = ref.hsUoms('8471.3020');
-    (await next(http, '/api/reference/hs-codes/8471.3020/uoms')).flush({ source: 'pral', uoms: ['Numbers, pieces, units'] });
+    (await next(http, '/api/businesses/b1/reference/uom-for-hs?hs=8471.3020')).flush({ source: 'pral', uoms: ['Numbers, pieces, units'] });
     expect(await retry).toEqual(['Numbers, pieces, units']);
   });
 
@@ -115,10 +118,10 @@ describe('ReferenceService with the API', () => {
     await loaded();
     expect(await ref.sroSchedules('Goods at standard rate (default)', '18%', '2026-10-18')).toEqual([]); // bundled rate: no id
     const sched = ref.sroSchedules('Goods at Reduced Rate', '5%', '2026-10-18');
-    (await next(http, '/api/reference/sro-schedules?rateId=280&province=Punjab&date=2026-10-18')).flush({ source: 'pral', schedules: [{ id: 389, serNo: 1, desc: 'EIGHTH SCHEDULE Table 1' }] });
+    (await next(http, '/api/businesses/b1/reference/sro?rateId=280&province=Punjab&date=2026-10-18')).flush({ source: 'pral', schedules: [{ id: 389, serNo: 1, desc: 'EIGHTH SCHEDULE Table 1' }] });
     expect(await sched).toEqual([{ id: 389, desc: 'EIGHTH SCHEDULE Table 1' }]);
     const items = ref.sroItems(389, '2026-10-18');
-    (await next(http, '/api/reference/sro-items?sroId=389&date=2026-10-18')).flush({ source: 'pral', items: [{ id: 17853, desc: '50' }] });
+    (await next(http, '/api/businesses/b1/reference/sro-items?sroId=389&date=2026-10-18')).flush({ source: 'pral', items: [{ id: 17853, desc: '50' }] });
     expect(await items).toEqual([{ id: 17853, desc: '50' }]);
   });
 });

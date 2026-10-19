@@ -8,16 +8,18 @@
  */
 import { sql } from 'drizzle-orm';
 import {
-  bigserial, check, date, foreignKey, index, integer, jsonb, numeric, pgTable, primaryKey, text, timestamp, unique, uniqueIndex,
+  bigserial, check, customType, date, foreignKey, index, integer, jsonb, numeric, pgTable, primaryKey, text, timestamp, unique, uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
 const created = () => ts('created_at').notNull().defaultNow();
 const updated = () => ts('updated_at').notNull().defaultNow();
 const money = (name: string) => numeric(name, { mode: 'number' }).notNull().default(0);
+const tsvector = customType<{ data: string }>({ dataType: () => 'tsvector' });
 
 export type Role = 'owner' | 'accountant' | 'viewer';
 export type FbrEnv = 'sandbox' | 'production';
+export type ReferenceSource = 'platform' | FbrEnv;
 export type InvoiceStatus = 'draft' | 'validated' | 'queued' | 'posting' | 'posted' | 'failed' | 'outcome_unknown';
 export type InvoiceType = 'Sale Invoice' | 'Debit Note';
 export type RegistrationType = 'Registered' | 'Unregistered';
@@ -222,6 +224,8 @@ export const refLists = pgTable('ref_lists', {
   asOf: text('as_of').notNull().default(''),
   data: jsonb('data').$type<unknown[]>().notNull(),
   fetchedAt: ts('fetched_at').notNull().defaultNow(),
+  /** Whose token fetched it: 'platform' (Rasid's own) or a customer's 'production' / 'sandbox' token. */
+  sourceEnv: text('source_env').$type<ReferenceSource>().notNull().default('platform'),
 }, t => [primaryKey({ columns: [t.kind, t.params, t.asOf] })]);
 
 /** /pdi/v1/itemdesccode, one row per HS code, for search. */
@@ -229,7 +233,13 @@ export const hsCodes = pgTable('hs_codes', {
   code: text('code').primaryKey(),
   description: text('description').notNull(),
   fetchedAt: ts('fetched_at').notNull().defaultNow(),
-});
+  sourceEnv: text('source_env').$type<ReferenceSource>().notNull().default('platform'),
+  /** Words of the code and description ('simple': no stemming, PRAL's descriptions mix English and trade terms). */
+  search: tsvector('search').notNull().generatedAlwaysAs(sql`to_tsvector('simple', code || ' ' || description)`),
+}, t => [
+  index('hs_codes_search_idx').using('gin', t.search),
+  index('hs_codes_digits_idx').on(sql`replace(${t.code}, '.', '') text_pattern_ops`),
+]);
 
 /**
  * Rasid's own PRAL token, used only to read reference lists. Sealed with the

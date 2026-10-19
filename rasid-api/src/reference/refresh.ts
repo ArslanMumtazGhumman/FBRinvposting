@@ -2,7 +2,7 @@
  * Refreshes the reference cache from PRAL. Runs nightly in the worker
  * (queue/reference.ts) and on demand from `reference-cli refresh`.
  *
- *   1. provinces, uom, transtypecode, itemdesccode (HS codes)
+ *   1. provinces, doctypecode, uom, transtypecode, sroitemcode, itemdesccode (HS codes)
  *   2. SaleTypeToRate for every Rasid sale type × province, for `date`
  *   3. SroSchedule for every rate found, then SROItem for every schedule
  *   4. HS_UOM again for each HS code someone has looked up
@@ -12,17 +12,31 @@
  * good copy of that list and doesn't stop the rest. A list that comes back
  * empty, or an HS list less than half the size of the cached one, is treated
  * as a failure rather than replacing good data. A 401 stops the run.
+ *
+ * `source` records whose token fetched the data: Rasid's ('platform') or a
+ * customer's fallback token ('production' / 'sandbox'); see token.ts.
  */
 import { fbr, FbrHttpError } from '../lib/fbr-client.js';
 import { KNOWN_SALE_TYPES } from '../lib/fbr-payload.js';
 import {
-  looseKey, requests, rowsOf, todayPk, toHsCodes, toProvinces, toRates, toSroItems, toSroSchedules, toTransTypes, toUoms, type RefRequest, type TransType,
+  looseKey, requests, rowsOf, todayPk, toDocTypes, toHsCodes, toProvinces, toRates, toSroItemCodes, toSroItems, toSroSchedules, toTransTypes, toUoms,
+  type RefRequest, type TransType,
 } from './pral.js';
+import type { ReferenceSource } from '../db/schema.js';
 import { cachedParams, hsCodeCount, pruneDated, readList, replaceHsCodes, writeList } from './store.js';
 
-export interface RefreshOptions { token: string; date?: string; concurrency?: number; keepDays?: number }
+export interface RefreshOptions {
+  token: string;
+  source?: ReferenceSource;
+  date?: string;
+  concurrency?: number;
+  keepDays?: number;
+  /** Retry a call on 5xx or network failure (fbr-client's back-off). Default true. */
+  retry?: boolean;
+}
 export interface RefreshSummary {
   date: string;
+  source: ReferenceSource;
   /** Rows stored per list. */
   counts: Record<string, number>;
   failed: { list: string; error: string }[];
@@ -48,12 +62,13 @@ export async function refreshReference(opts: RefreshOptions): Promise<RefreshSum
   const started = Date.now();
   const date = opts.date ?? todayPk();
   const concurrency = opts.concurrency ?? 4;
-  const s: RefreshSummary = { date, counts: {}, failed: [], calls: 0, stoppedBy401: false, ms: 0 };
+  const source = opts.source ?? 'platform';
+  const s: RefreshSummary = { date, source, counts: {}, failed: [], calls: 0, stoppedBy401: false, ms: 0 };
 
   const get = async (r: RefRequest) => {
     if (s.stoppedBy401) throw new Error('stopped: FBR rejected the reference token');
     s.calls++;
-    try { return (await fbr.reference(opts.token, r.kind, r.query)).json as unknown; }
+    try { return (await fbr.reference(opts.token, r.kind, r.query, { retry: opts.retry ?? true })).json as unknown; }
     catch (e) { if (e instanceof FbrHttpError && e.status === 401) s.stoppedBy401 = true; throw e; }
   };
 
@@ -72,15 +87,17 @@ export async function refreshReference(opts: RefreshOptions): Promise<RefreshSum
   // 1. Lists without parameters.
   const globals: [string, RefRequest, (json: unknown) => unknown[]][] = [
     ['provinces', requests.provinces(), toProvinces],
+    ['doctypecode', requests.docTypes(), toDocTypes],
     ['uom', requests.uom(), toUoms],
     ['transtypecode', requests.transTypes(), toTransTypes],
+    ['sroitemcode', requests.sroItemCodes(), toSroItemCodes],
   ];
   for (const [list, req, parse] of globals) {
     try {
       const json = await get(req);
       const n = parse(json).length;
       if (!n) throw new Error('FBR returned an empty list; kept the cached copy');
-      await writeList(req, rowsOf(json));
+      await writeList(req, rowsOf(json), source);
       s.counts[list] = n;
     } catch (e) { s.failed.push({ list, error: message(e) }); }
   }
@@ -90,7 +107,7 @@ export async function refreshReference(opts: RefreshOptions): Promise<RefreshSum
     if (!list.length || list.length < cached / 2) {
       throw new Error(`FBR returned ${list.length} HS codes (cached: ${cached}); kept the cached copy`);
     }
-    s.counts.itemdesccode = await replaceHsCodes(list);
+    s.counts.itemdesccode = await replaceHsCodes(list, source);
   } catch (e) { s.failed.push({ list: 'itemdesccode', error: message(e) }); }
 
   // 2. Rates, from whichever copy of provinces / transaction types is cached now.
@@ -102,7 +119,7 @@ export async function refreshReference(opts: RefreshOptions): Promise<RefreshSum
   let rates = 0;
   await each('SaleTypeToRate', rateJobs, async ({ province, req }) => {
     const json = await get(req);
-    await writeList(req, rowsOf(json));
+    await writeList(req, rowsOf(json), source);
     for (const r of toRates(json)) {
       rates++;
       const sro = requests.sroSchedules(r.id, province, date);
@@ -116,14 +133,14 @@ export async function refreshReference(opts: RefreshOptions): Promise<RefreshSum
   let sros = 0;
   await each('SroSchedule', [...schedules.values()], async req => {
     const json = await get(req);
-    await writeList(req, rowsOf(json));
+    await writeList(req, rowsOf(json), source);
     for (const x of toSroSchedules(json)) { sros++; items.set(x.id, requests.sroItems(x.id, date)); }
   });
   s.counts.SroSchedule = sros;
   let sroItems = 0;
   await each('SROItem', [...items.values()], async req => {
     const json = await get(req);
-    await writeList(req, rowsOf(json));
+    await writeList(req, rowsOf(json), source);
     sroItems += toSroItems(json).length;
   });
   s.counts.SROItem = sroItems;
@@ -132,7 +149,7 @@ export async function refreshReference(opts: RefreshOptions): Promise<RefreshSum
   const looked = (await cachedParams('HS_UOM')).map(p => p.replace(/^hs=/, ''));
   await each('HS_UOM', looked, async code => {
     const req = requests.hsUom(code);
-    await writeList(req, rowsOf(await get(req)));
+    await writeList(req, rowsOf(await get(req)), source);
   });
   s.counts.HS_UOM = looked.length;
 

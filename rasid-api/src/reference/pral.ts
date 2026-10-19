@@ -9,7 +9,7 @@ type Row = Record<string, unknown>;
 
 /** One cacheable PRAL request. `params` (no date) and `asOf` form the cache key in ref_lists. */
 export interface RefRequest {
-  kind: 'provinces' | 'uom' | 'itemdesccode' | 'transtypecode' | 'SaleTypeToRate' | 'HS_UOM' | 'SroSchedule' | 'SROItem';
+  kind: 'provinces' | 'doctypecode' | 'uom' | 'itemdesccode' | 'transtypecode' | 'sroitemcode' | 'SaleTypeToRate' | 'HS_UOM' | 'SroSchedule' | 'SROItem';
   query: string;
   params: string;
   asOf: string;
@@ -27,7 +27,9 @@ export const todayPk = (now = new Date()) => new Intl.DateTimeFormat('en-CA', { 
 
 export const requests = {
   provinces: (): RefRequest => ({ kind: 'provinces', query: '', params: '', asOf: '' }),
+  docTypes: (): RefRequest => ({ kind: 'doctypecode', query: '', params: '', asOf: '' }),
   uom: (): RefRequest => ({ kind: 'uom', query: '', params: '', asOf: '' }),
+  sroItemCodes: (): RefRequest => ({ kind: 'sroitemcode', query: '', params: '', asOf: '' }),
   hsCodes: (): RefRequest => ({ kind: 'itemdesccode', query: '', params: '', asOf: '' }),
   transTypes: (): RefRequest => ({ kind: 'transtypecode', query: '', params: '', asOf: '' }),
   rates: (transTypeId: number, province: number, date: string): RefRequest => ({
@@ -70,6 +72,7 @@ const int = (row: Row, name: string) => {
 };
 
 export interface Province { code: number; desc: string }
+export interface DocType { id: number; desc: string }
 export interface Uom { id: number; description: string }
 export interface HsCode { code: string; description: string }
 export interface TransType { id: number; desc: string }
@@ -80,6 +83,8 @@ export interface SroItem { id: number; desc: string }
 
 export const toProvinces = (json: unknown): Province[] => rowsOf(json)
   .map(r => ({ code: int(r, 'stateProvinceCode'), desc: str(r, 'stateProvinceDesc') })).filter((p): p is Province => p.code !== null && p.desc !== '');
+export const toDocTypes = (json: unknown): DocType[] => rowsOf(json)
+  .map(r => ({ id: int(r, 'docTypeId'), desc: str(r, 'docDescription') })).filter((d): d is DocType => d.id !== null && d.desc !== '');
 export const toUoms = (json: unknown): Uom[] => rowsOf(json)
   .map(r => ({ id: int(r, 'uoM_ID'), description: str(r, 'description') })).filter((u): u is Uom => u.id !== null && u.description !== '');
 export const toHsCodes = (json: unknown): HsCode[] => rowsOf(json)
@@ -94,6 +99,12 @@ export const toSroSchedules = (json: unknown): SroSchedule[] => rowsOf(json)
   .map(r => ({ id: int(r, 'srO_ID'), serNo: int(r, 'serNo'), desc: str(r, 'srO_DESC') })).filter((x): x is SroSchedule => x.id !== null);
 export const toSroItems = (json: unknown): SroItem[] => rowsOf(json)
   .map(r => ({ id: int(r, 'srO_ITEM_ID'), desc: str(r, 'srO_ITEM_DESC') })).filter((x): x is SroItem => x.id !== null);
+
+/** sroitemcode (spec 5.6) has the same fields as SROItem. */
+export const toSroItemCodes = (json: unknown): SroItem[] => toSroItems(json);
+
+/** Lookups with parameters (rates, HS→UOM, SRO) expire after REFERENCE_TTL_HOURS; plain lists change only nightly. */
+export const isParameterised = (r: RefRequest) => r.params !== '';
 
 /** Letters and digits only, lower case: "Processing/ Conversion of Goods" matches "Processing/Conversion of goods". */
 export const looseKey = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');

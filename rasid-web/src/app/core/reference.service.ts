@@ -13,13 +13,13 @@ export interface SroOption { id: number; desc: string }
 /** `source: 'none'`: the API has no PRAL copy of this list; use the bundled one. */
 type Source = 'pral' | 'none';
 interface SaleTypesResponse { source: Source; saleTypes: { saleType: string; rates: LiveRate[]; asOf: string | null }[] }
-interface UomsResponse { source: Source; uoms: { id: number; description: string }[] }
+interface UomsResponse { source: Source; items: { id: number; description: string }[] }
 interface HsResponse { source: Source; results: { code: string; description: string }[] }
 interface HsUomResponse { source: Source; uoms: string[] }
 
 /**
  * PRAL reference data for the forms. With the API, rates, UOMs, HS codes and
- * HS→UOM rules come from Rasid's nightly PRAL cache (rasid-api /api/reference),
+ * HS→UOM rules come from Rasid's nightly PRAL cache (rasid-api /api/businesses/:id/reference),
  * for the active business's province. Offline, or for anything the API has no
  * PRAL copy of, the bundled lists in fbr-reference.ts are used.
  */
@@ -60,14 +60,17 @@ export class ReferenceService {
     queueMicrotask(() => void this.load(province));
   }
 
+  /** Reference endpoints are scoped to the active business. */
   private get<T>(path: string, params: Record<string, string | number> = {}): Promise<T> {
-    return firstValueFrom(this.http.get<T>(environment.apiBaseUrl + '/reference' + path, { params }));
+    const id = this.store.business()?.id;
+    if (!id) return Promise.reject(new Error('No active business'));
+    return firstValueFrom(this.http.get<T>(`${environment.apiBaseUrl}/businesses/${encodeURIComponent(id)}/reference${path}`, { params }));
   }
 
   private async load(province: string) {
     const [types, uoms] = await Promise.allSettled([
-      this.get<SaleTypesResponse>('/sale-types', { province, date: todayIso() }),
-      this.get<UomsResponse>('/uoms'),
+      this.get<SaleTypesResponse>('/rates', { province, date: todayIso() }),
+      this.get<UomsResponse>('/uom'),
     ]);
     if (types.status === 'fulfilled' && types.value.source === 'pral') {
       this.live.set(new Map(types.value.saleTypes.filter(s => s.rates.length).map(s => [s.saleType.toLowerCase(), s.rates])));
@@ -76,7 +79,7 @@ export class ReferenceService {
       this.live.set(new Map());
       this.ratesAsOf.set(null);
     }
-    this.liveUoms.set(uoms.status === 'fulfilled' && uoms.value.source === 'pral' ? uoms.value.uoms.map(u => u.description) : []);
+    this.liveUoms.set(uoms.status === 'fulfilled' && uoms.value.source === 'pral' ? uoms.value.items.map(u => u.description) : []);
   }
 
   /** Rates to offer for a sale type, PRAL's when known; the first is the default. */
@@ -99,7 +102,7 @@ export class ReferenceService {
     if (text.length < 2) return [];
     if (this.store.mode === 'api') {
       try {
-        const r = await this.get<HsResponse>('/hs-codes', { q: text, limit });
+        const r = await this.get<HsResponse>('/hs', { q: text, limit });
         if (r.source === 'pral') return r.results.map(h => ({ code: h.code, desc: h.description }));
       } catch { /* fall back to the bundled sample */ }
     }
@@ -124,7 +127,7 @@ export class ReferenceService {
     if (this.hsUomRules().has(hsCode)) return Promise.resolve(this.hsUomRules().get(hsCode) ?? null);
     let p = this.hsUomPending.get(hsCode);
     if (!p) {
-      p = this.get<HsUomResponse>(`/hs-codes/${hsCode}/uoms`)
+      p = this.get<HsUomResponse>('/uom-for-hs', { hs: hsCode })
         .then(r => (r.source === 'pral' && r.uoms.length ? r.uoms : null))
         .catch(() => undefined)
         .then(list => {
@@ -144,7 +147,7 @@ export class ReferenceService {
     const province = this.store.business()?.province;
     if (this.store.mode !== 'api' || !rateId || !province) return [];
     try {
-      const r = await this.get<{ schedules: { id: number; desc: string }[] }>('/sro-schedules', { rateId, province, date });
+      const r = await this.get<{ schedules: { id: number; desc: string }[] }>('/sro', { rateId, province, date });
       return r.schedules.map(s => ({ id: s.id, desc: s.desc }));
     } catch { return []; }
   }

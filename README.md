@@ -104,23 +104,26 @@ post becomes `outcome_unknown` and is never retried automatically.
 
 ### Reference data
 
-PRAL's reference lists are the same for every tenant, so they live under `/api/reference` (any signed-in
-user, no business). They're served from Postgres, filled nightly by the worker with Rasid's own PRAL token
-(`reference-cli set-token`), never a customer's. On a miss the API asks PRAL live (5 s, no retries) and caches
-the answer. `source: "none"` means there's no PRAL copy yet, and the web app falls back to its bundled lists.
+PRAL's reference lists are the same for every tenant, but the routes sit under the business,
+`/api/businesses/:businessId/reference`, so only members can read them and province and date default to the
+business's own. They're read-only and served from Postgres, filled nightly by the worker. The token is Rasid's
+own (`reference-cli set-token`) or, only while that isn't set, a customer's token that passed its last test,
+production first. The token never leaves the server. On a miss, or when a rate, HS→UOM or SRO answer is older
+than 12 hours (`REFERENCE_TTL_HOURS`), the API asks PRAL live (5 s, no retries). If that fails it serves the cached
+copy. `source: "none"` means there's no PRAL copy yet, and the web app falls back to its bundled lists.
 
 | Route | Notes |
 | --- | --- |
-| `GET /sale-types?province=Punjab&date=YYYY-MM-DD` | PRAL rates per Rasid sale type for the seller's province (`date` defaults to today in Pakistan) |
-| `GET /hs-codes?q=sugar&limit=20` | HS search: code prefix (`1701`, `1701.99`, `170199`) or all words in the description |
-| `GET /hs-codes/:code/uoms` | Units FBR accepts for an HS code (`HS_UOM`) |
-| `GET /sro-schedules?rateId&province&date`, `GET /sro-items?sroId&date` | SRO schedules for a PRAL rate, items of a schedule |
-| `GET /provinces`, `GET /uoms` | As PRAL lists them, with PRAL's codes |
-| `GET /status` | Cache freshness per list, and whether the reference token is set (never the token) |
+| `GET /rates?saleType&date&province` | PRAL rates per Rasid sale type (or just `saleType`); province defaults to the business's, `date` to today in Pakistan |
+| `GET /hs?q=sugar&limit=20` | HS search: code prefix (`1701`, `1701.99`, `170199`) or words as prefixes of code and description (`tsvector`) |
+| `GET /uom-for-hs?hs=1701.9910` | Units FBR accepts for an HS code (`HS_UOM`, sales annexure) |
+| `GET /sro?rateId&date&province`, `GET /sro-items?sroId&date` | SRO schedules for a PRAL rate, items of a schedule |
+| `GET /:kind` | `provinces`, `doctypecode`, `uom`, `transtypecode`, `sroitemcode` as PRAL lists them → `{ items }` |
+| `GET /status` | Cache freshness per list, and which token lookups use: `platform`, `production`, `sandbox` or none (never the token) |
 
 Operators: `node dist/reference-cli.js set-token | clear-token | refresh [YYYY-MM-DD] | status` (in compose:
 `docker compose run --rm migrate node dist/reference-cli.js …`). The schedule is `REFERENCE_REFRESH_CRON`
-(default `30 2 * * *`, Pakistan time).
+(default `0 2 * * *`, Pakistan time).
 
 ## What is where
 
@@ -162,8 +165,9 @@ Operators: `node dist/reference-cli.js set-token | clear-token | refresh [YYYY-M
   switching `VAULT_ACTIVE_KEY`.
 - **FBR logo:** the invoice print view has a placeholder box. Use the official Digital Invoicing System
   image supplied by PRAL (spec section 6). QR is version 2 at 1 × 1 inch, as specified.
-- **Rates:** set Rasid's reference token (`reference-cli set-token`) so rates, units and HS codes come from PRAL;
-  without it the bundled, illustrative rates in `fbr-reference.ts` are shown. Run `reference-cli refresh` then
+- **Rates:** set Rasid's reference token (`reference-cli set-token`) so rates, units and HS codes come from PRAL
+  under Rasid's name. Without it a customer's tested token is used (FBR attributes those calls to the customer;
+  see the legal point below), and with neither the bundled, illustrative rates in `fbr-reference.ts` are shown. Run `reference-cli refresh` then
   `status` once with the real token: the PRAL response shapes are tested against a fake, not the live sandbox.
   Confirm the further-tax rate with a tax adviser.
 - **Timeouts on post:** FBR offers no idempotency or lookup, so a post that times out is reported as

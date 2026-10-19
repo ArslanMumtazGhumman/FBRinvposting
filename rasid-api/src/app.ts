@@ -26,7 +26,7 @@ export const ROUTERS: [string, Router][] = [
   ['/api/businesses/:businessId/products', productRoutes],
   ['/api/businesses/:businessId/import-mappings', importMappingRoutes],
   ['/api/fbr/:businessId', fbrRoutes],
-  ['/api/reference', referenceRoutes],
+  ['/api/businesses/:businessId/reference', referenceRoutes],
 ];
 
 /** The Express app without a listener (server.ts listens; tests mount it on an ephemeral port). */

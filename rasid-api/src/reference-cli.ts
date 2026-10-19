@@ -9,7 +9,8 @@
  *
  * The token is Rasid's own PRAL token (any valid one; reference lists are the
  * same for everyone). It is stored sealed, never printed, and never sent
- * anywhere but FBR.
+ * anywhere but FBR. Without it, refresh and lookups fall back to a customer's
+ * tested token (src/reference/token.ts).
  */
 import readline from 'node:readline';
 import { Writable } from 'node:stream';
@@ -21,7 +22,7 @@ import { audit } from './lib/audit.js';
 import { fbr } from './lib/fbr-client.js';
 import { refreshReference } from './reference/refresh.js';
 import { cacheStatus } from './reference/store.js';
-import { hasReferenceToken, loadReferenceToken, sealReferenceToken } from './reference/token.js';
+import { hasReferenceToken, referenceToken, referenceTokenSource, rejectReferenceToken, sealReferenceToken } from './reference/token.js';
 
 const [command, arg] = process.argv.slice(2);
 
@@ -67,16 +68,17 @@ async function main() {
       console.log('Removed. Cached lists stay until the next successful refresh.');
       break;
     case 'refresh': {
-      const token = await loadReferenceToken();
-      if (!token) throw new Error('No reference token. Run set-token first.');
       if (arg && !/^\d{4}-\d{2}-\d{2}$/.test(arg)) throw new Error('Date must be YYYY-MM-DD.');
-      const summary = await refreshReference({ token, date: arg });
+      const t = await referenceToken();
+      if (!t) throw new Error('No reference token, and no customer token has passed a test. Run set-token first.');
+      const summary = await refreshReference({ token: t.token, source: t.source, date: arg });
+      if (summary.stoppedBy401) await rejectReferenceToken(t);
       console.log(JSON.stringify(summary, null, 2));
       if (summary.failed.length) process.exitCode = 2;
       break;
     }
     case 'status':
-      console.log(JSON.stringify({ tokenConfigured: await hasReferenceToken(), ...(await cacheStatus()) }, null, 2));
+      console.log(JSON.stringify({ tokenConfigured: await hasReferenceToken(), tokenSource: await referenceTokenSource(), ...(await cacheStatus()) }, null, 2));
       break;
     default:
       console.error('Usage: reference-cli set-token | clear-token | refresh [YYYY-MM-DD] | status');

@@ -1,7 +1,8 @@
 /**
  * PRAL reference data: the CLI stores Rasid's token sealed, the worker's
- * nightly job fills the Postgres cache from a fake PRAL, and the lookup
- * endpoints serve it (with read-through, fallback and no customer token).
+ * nightly job fills the Postgres cache from a fake PRAL, and the
+ * business-scoped lookup endpoints serve it (read-through, 12 h expiry,
+ * fallback). Without Rasid's token a customer's tested token is used.
  */
 import { after, describe, test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,12 +11,13 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { RedisContainer } from '@testcontainers/redis';
-import { eq, sql } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { startTestDb, type TestDb } from './helpers/db.js';
 
 /* ---------- fake PRAL reference APIs ---------- */
 const REF_TOKEN = 'rasid-platform-reference-token-0123456789';
-const mode = { down: false, unauthorized: false, shortHsList: false, slowHsUom: false };
+const CUSTOMER_TOKEN = 'customer-production-token-9876543210ab';
+const mode = { down: false, error500: false, empty: false, unauthorized: false, rejectCustomer: false, shortHsList: false, slowHsUom: false };
 const seen: { auth: string; path: string; query: URLSearchParams }[] = [];
 const HS = [
   { hS_CODE: '1701.9910', description: 'REFINED SUGAR, CANE OR BEET' },
@@ -36,11 +38,16 @@ const fake = http.createServer((req, res) => {
   const send = (body: unknown, status = 200) => { res.statusCode = status; res.end(JSON.stringify(body)); };
   if (mode.unauthorized) return send({ message: 'unauthorized' }, 401);
   if (mode.down) return send({ message: 'down' }, 503);
-  if (req.headers.authorization !== `Bearer ${REF_TOKEN}`) return send({ message: 'unauthorized' }, 401);
+  if (mode.error500) return send({ message: 'internal error' }, 500);
+  const valid = [`Bearer ${REF_TOKEN}`, ...(mode.rejectCustomer ? [] : [`Bearer ${CUSTOMER_TOKEN}`])];
+  if (!valid.includes(req.headers.authorization ?? '')) return send({ message: 'unauthorized' }, 401);
+  if (mode.empty) return send([]);
   const q = (k: string) => url.searchParams.get(k) ?? '';
   switch (url.pathname) {
     case '/pdi/v1/provinces': return send([{ stateProvinceCode: 7, stateProvinceDesc: 'PUNJAB' }, { stateProvinceCode: 8, stateProvinceDesc: 'SINDH' }]);
+    case '/pdi/v1/doctypecode': return send([{ docTypeId: 4, docDescription: 'Sale Invoice' }, { docTypeId: 9, docDescription: 'Debit Note' }]);
     case '/pdi/v1/uom': return send([{ uoM_ID: 13, description: 'KG' }, { uoM_ID: 69, description: 'Numbers, pieces, units' }, { uoM_ID: 99, description: 'KWH' }]);
+    case '/pdi/v1/sroitemcode': return send([{ srO_ITEM_ID: 724, srO_ITEM_DESC: '9' }, { srO_ITEM_ID: 728, srO_ITEM_DESC: '1' }]);
     case '/pdi/v1/transtypecode': return send([
       { transactioN_TYPE_ID: 75, transactioN_DESC: 'Goods at standard rate (default)' },
       { transactioN_TYPE_ID: 24, transactioN_DESC: 'Goods at Reduced Rate' },
@@ -75,7 +82,10 @@ const s = await import('../src/db/schema.js');
 
 const app = await startApp();
 const A = await createTenant(tdb, 'alpha');
+const B = await createTenant(tdb, 'bravo');
 const a = await signIn(app.base, A);
+/** A reference path under business A. */
+const R = (p: string) => `/businesses/${A.businessId}/reference${p}`;
 const TODAY = todayPk();
 const fbrCalls = () => seen.filter(x => x.auth !== '').length;
 const callsTo = (path: string) => seen.filter(x => x.path === path);
@@ -109,31 +119,82 @@ async function waitFor<T>(fn: () => Promise<T | undefined | false>, ms = 20_000)
   }
 }
 
-describe('before Rasid has a reference token', () => {
+const PATHS = ['/provinces', '/doctypecode', '/uom', '/transtypecode', '/sroitemcode', '/rates', '/rates?saleType=Goods at Reduced Rate',
+  '/hs?q=sugar', '/uom-for-hs?hs=2716.0000', '/sro?rateId=280', '/sro-items?sroId=389', '/status'];
+
+describe('before any token is usable', () => {
   test('lookups answer source "none" without calling FBR', async () => {
-    assert.equal((await a.get('/reference/sale-types?province=Punjab')).body.source, 'none');
-    assert.deepEqual((await a.get('/reference/hs-codes?q=sugar')).body, { source: 'none', results: [] });
-    assert.deepEqual((await a.get('/reference/hs-codes/2716.0000/uoms')).body, { source: 'none', uoms: [] });
-    assert.equal((await a.get('/reference/status')).body.tokenConfigured, false);
+    assert.equal((await a.get(R('/rates'))).body.source, 'none');
+    assert.deepEqual((await a.get(R('/hs?q=sugar'))).body, { source: 'none', results: [] });
+    assert.deepEqual((await a.get(R('/uom-for-hs?hs=2716.0000'))).body, { source: 'none', uoms: [] });
+    assert.deepEqual((await a.get(R('/uom'))).body, { source: 'none', kind: 'uom', items: [] });
+    const status = (await a.get(R('/status'))).body;
+    assert.deepEqual([status.tokenConfigured, status.tokenSource], [false, null]);
     assert.equal(fbrCalls(), 0);
   });
 
-  test('the endpoints need a signed-in user and validate their input', async () => {
+  test('the endpoints need a signed-in member of the business and validate their input', async () => {
     const anon = new Client(app.base);
-    for (const path of ['/reference/provinces', '/reference/uoms', '/reference/sale-types?province=Punjab', '/reference/hs-codes?q=sugar',
-      '/reference/hs-codes/2716.0000/uoms', '/reference/sro-schedules?rateId=1&province=Punjab', '/reference/sro-items?sroId=1', '/reference/status']) {
-      assert.equal((await anon.get(path)).status, 401, path);
-    }
-    assert.equal((await a.get('/reference/hs-codes?q=s')).status, 400);
-    assert.equal((await a.get('/reference/hs-codes?q=sugar&limit=500')).status, 400);
-    assert.equal((await a.get('/reference/hs-codes/2716/uoms')).status, 400);
-    assert.equal((await a.get('/reference/sale-types')).status, 400);
-    assert.equal((await a.get('/reference/sale-types?province=Punjab&date=2026-02-30')).status, 400);
-    assert.equal((await a.get('/reference/sro-items?sroId=abc')).status, 400);
+    for (const p of PATHS) assert.equal((await anon.get(R(p))).status, 401, p);
+    for (const p of PATHS) assert.equal((await a.get(`/businesses/${B.businessId}/reference${p}`)).status, 404, `A on B: ${p}`);
+    assert.equal((await a.get(R('/hs?q=s'))).status, 400);
+    assert.equal((await a.get(R('/hs?q=sugar&limit=500'))).status, 400);
+    assert.equal((await a.get(R('/uom-for-hs?hs=2716'))).status, 400);
+    assert.equal((await a.get(R('/uom-for-hs'))).status, 400);
+    assert.equal((await a.get(R('/rates?date=2026-02-30'))).status, 400);
+    assert.equal((await a.get(R('/sro'))).status, 400);
+    assert.equal((await a.get(R('/sro-items?sroId=abc'))).status, 400);
+    assert.equal((await a.get(R('/itemdesccode'))).status, 400, 'the HS list is searched, not downloaded');
+    assert.equal((await a.get(R('/postinvoicedata'))).status, 400);
   });
 
-  test('the old per-business proxy is gone', async () => {
+  test('they are read-only', async () => {
+    for (const p of ['/uom', '/rates', '/hs', '/status']) {
+      for (const method of ['POST', 'PUT', 'DELETE']) assert.equal((await a.req(method, R(p), {})).status, 404, `${method} ${p}`);
+    }
+  });
+
+  test('the old unscoped routes are gone', async () => {
+    assert.equal((await a.get('/reference/provinces')).status, 404);
     assert.equal((await a.get(`/fbr/${A.businessId}/reference/provinces`)).status, 404);
+  });
+});
+
+describe('customer token fallback (Rasid has no reference token)', () => {
+  const cred = () => tdb.admin.select().from(s.fbrCredentials).where(and(eq(s.fbrCredentials.businessId, A.businessId), eq(s.fbrCredentials.env, 'production')));
+
+  test('a customer token that was never tested is not used', async () => {
+    assert.equal((await a.put(`/businesses/${A.businessId}/credentials/production`, { token: CUSTOMER_TOKEN })).status, 200);
+    assert.equal((await a.get(R('/uom'))).body.source, 'none');
+    assert.equal(fbrCalls(), 0);
+  });
+
+  test('a tested one is used, and the cache records whose token fetched it', async () => {
+    assert.equal((await a.post(`/businesses/${A.businessId}/credentials/production/test`)).status, 200);
+    resetLookupState();
+    const before = seen.length;
+    const r = (await a.get(R('/uom'))).body;
+    assert.deepEqual([r.source, r.items.length], ['pral', 3]);
+    assert.deepEqual(seen.slice(before).map(x => x.auth), [`Bearer ${CUSTOMER_TOKEN}`]);
+    const [row] = await tdb.admin.select().from(s.refLists).where(eq(s.refLists.kind, 'uom'));
+    assert.equal(row!.sourceEnv, 'production');
+    const status = (await a.get(R('/status'))).body;
+    assert.deepEqual([status.tokenConfigured, status.tokenSource], [false, 'production']);
+    assert.ok(!JSON.stringify(status).includes(CUSTOMER_TOKEN));
+  });
+
+  test('a 401 retires it until its owner tests it again', async () => {
+    mode.rejectCustomer = true;
+    resetLookupState();
+    try {
+      assert.equal((await a.get(R('/doctypecode'))).body.source, 'none');
+      assert.equal((await cred())[0]!.lastOkAt, null);
+      assert.equal((await a.get(R('/status'))).body.tokenSource, null);
+    } finally { mode.rejectCustomer = false; }
+    // Back to a clean slate for Rasid's own token.
+    await tdb.admin.delete(s.refLists);
+    await tdb.admin.delete(s.fbrCredentials);
+    resetLookupState();
   });
 });
 
@@ -169,13 +230,18 @@ describe('reference-cli set-token', () => {
 
 describe('nightly refresh', () => {
   test('the worker registers the nightly schedule and fills an empty cache at once', async () => {
-    refWorker = await startReferenceWorker({ cron: '30 2 * * *' });
+    const from = seen.length;
+    refWorker = await startReferenceWorker({ cron: '0 2 * * *' });
     const schedulers = await refWorker.queue.getJobSchedulers();
-    assert.deepEqual(schedulers.map(x => [x.key, x.pattern, x.tz]), [['nightly', '30 2 * * *', 'Asia/Karachi']]);
+    assert.deepEqual(schedulers.map(x => [x.key, x.pattern, x.tz]), [['nightly', '0 2 * * *', 'Asia/Karachi']]);
 
     await waitFor(async () => (await tdb.admin.select({ n: sql<number>`count(*)::int` }).from(s.hsCodes))[0]!.n === HS.length);
     await waitFor(async () => (await tdb.admin.select().from(s.refLists).where(eq(s.refLists.kind, 'SROItem'))).length > 0);
-    assert.ok(seen.filter(x => !x.auth.includes('not-the-right-token')).every(x => x.auth === `Bearer ${REF_TOKEN}`), 'only Rasid’s reference token is used');
+    assert.ok(seen.slice(from).every(x => x.auth === `Bearer ${REF_TOKEN}`), 'Rasid’s own token comes first');
+    for (const kind of ['provinces', 'doctypecode', 'uom', 'transtypecode', 'sroitemcode']) {
+      const [row] = await tdb.admin.select().from(s.refLists).where(eq(s.refLists.kind, kind));
+      assert.ok(row && row.data.length > 0 && row.sourceEnv === 'platform', kind);
+    }
 
     // Every sale type × province was asked for today's date, in PRAL's date format.
     const rateCalls = callsTo('/pdi/v2/SaleTypeToRate');
@@ -187,7 +253,7 @@ describe('nightly refresh', () => {
 
     // Restarting a worker doesn't queue another fill once the cache is full.
     const before = callsTo('/pdi/v1/itemdesccode').length;
-    const second = await startReferenceWorker({ cron: '30 2 * * *' });
+    const second = await startReferenceWorker({ cron: '0 2 * * *' });
     await new Promise(r => setTimeout(r, 500));
     await second.close();
     assert.equal(callsTo('/pdi/v1/itemdesccode').length, before);
@@ -204,14 +270,34 @@ describe('nightly refresh', () => {
     } finally { mode.shortHsList = false; }
   });
 
+  test('FBR answering 500, or [] for everything, keeps every cached list', async () => {
+    const cache = async () => JSON.stringify([
+      await tdb.admin.select({ kind: s.refLists.kind, params: s.refLists.params, asOf: s.refLists.asOf, data: s.refLists.data }).from(s.refLists)
+        .orderBy(asc(s.refLists.kind), asc(s.refLists.params), asc(s.refLists.asOf)),
+      await tdb.admin.select({ code: s.hsCodes.code, description: s.hsCodes.description }).from(s.hsCodes).orderBy(asc(s.hsCodes.code)),
+    ]);
+    const before = await cache();
+    assert.ok(before.includes('EIGHTH SCHEDULE') && before.includes('REFINED SUGAR'));
+    for (const m of ['error500', 'empty'] as const) {
+      mode[m] = true;
+      try {
+        const r = await refreshReference({ token: REF_TOKEN, retry: false });
+        for (const list of ['provinces', 'doctypecode', 'uom', 'transtypecode', 'sroitemcode', 'itemdesccode']) {
+          assert.ok(r.failed.some(f => f.list === list), `${m}: ${list} reported as failed`);
+        }
+        assert.equal(await cache(), before, `${m}: nothing was wiped`);
+      } finally { mode[m] = false; }
+    }
+  });
+
   test('a 401 stops the run early and keeps the cache', async () => {
     mode.unauthorized = true;
     const callsBefore = seen.length;
     try {
       const r = await refreshReference({ token: REF_TOKEN });
       assert.equal(r.stoppedBy401, true);
-      assert.ok(seen.length - callsBefore <= 5, `made ${seen.length - callsBefore} calls`);
-      assert.ok((await a.get('/reference/hs-codes?q=sugar')).body.results.length > 0);
+      assert.ok(seen.length - callsBefore <= 7, `made ${seen.length - callsBefore} calls`);
+      assert.ok((await a.get(R('/hs?q=sugar'))).body.results.length > 0);
     } finally { mode.unauthorized = false; }
   });
 
@@ -226,9 +312,9 @@ describe('nightly refresh', () => {
 });
 
 describe('lookups', () => {
-  test('sale-type rates come from PRAL for the seller’s province', async () => {
+  test('sale-type rates come from PRAL for the business’s province by default', async () => {
     const calls = fbrCalls();
-    const punjab = (await a.get('/reference/sale-types?province=Punjab')).body;
+    const punjab = (await a.get(R('/rates'))).body;
     assert.equal(punjab.source, 'pral');
     assert.deepEqual(punjab.province, { code: 7, desc: 'PUNJAB' });
     const rates = (st: { saleType: string; rates: { desc: string }[] }[], name: string) => st.find(x => x.saleType === name)?.rates.map(r => r.desc);
@@ -238,20 +324,24 @@ describe('lookups', () => {
     assert.equal(punjab.saleTypes.length, 3, 'sale types PRAL does not list are left out');
     assert.ok(punjab.saleTypes.every((x: { asOf: string }) => x.asOf === TODAY));
 
-    const sindh = (await a.get('/reference/sale-types?province=sindh')).body;
+    const one = (await a.get(R('/rates?saleType=Goods at Reduced Rate'))).body;
+    assert.deepEqual(one.saleTypes.map((x: { saleType: string; transTypeId: number }) => [x.saleType, x.transTypeId]), [['goods at reduced rate', 24]]);
+    assert.deepEqual(one.saleTypes[0].rates.map((r: { id: number; value: number }) => [r.id, r.value]), [[280, 5], [281, 10]]);
+
+    const sindh = (await a.get(R('/rates?province=sindh'))).body;
     assert.deepEqual(rates(sindh.saleTypes, 'goods at standard rate (default)'), ['18% along with rupees 60 per kilogram']);
     assert.deepEqual(rates(sindh.saleTypes, 'goods at reduced rate'), []);
     assert.equal(fbrCalls(), calls, 'served from the cache');
-    assert.equal((await a.get('/reference/sale-types?province=Balochistan')).body.source, 'none');
+    assert.equal((await a.get(R('/rates?province=Balochistan'))).body.source, 'none');
   });
 
   test('another date is fetched once, then cached', async () => {
     const before = callsTo('/pdi/v2/SaleTypeToRate').length;
-    const r = (await a.get('/reference/sale-types?province=Punjab&date=2026-09-01')).body;
+    const r = (await a.get(R('/rates?date=2026-09-01'))).body;
     assert.ok(r.saleTypes.every((x: { asOf: string }) => x.asOf === '2026-09-01'));
     assert.equal(callsTo('/pdi/v2/SaleTypeToRate').length, before + 3);
     assert.ok(callsTo('/pdi/v2/SaleTypeToRate').slice(-3).every(c => c.query.get('date') === '01-Sep-2026'));
-    await a.get('/reference/sale-types?province=Punjab&date=2026-09-01');
+    await a.get(R('/rates?date=2026-09-01'));
     assert.equal(callsTo('/pdi/v2/SaleTypeToRate').length, before + 3);
   });
 
@@ -260,35 +350,41 @@ describe('lookups', () => {
     mode.down = true;
     try {
       const before = seen.length;
-      const r = (await a.get('/reference/sale-types?province=Punjab&date=2026-09-15')).body;
+      const r = (await a.get(R('/rates?date=2026-09-15'))).body;
       assert.equal(r.source, 'pral');
       assert.ok(r.saleTypes.every((x: { asOf: string }) => x.asOf === '2026-09-01'), 'nearest earlier date');
       assert.equal(seen.length - before, 3);
-      await a.get('/reference/sale-types?province=Punjab&date=2026-09-15');
+      await a.get(R('/rates?date=2026-09-15'));
       assert.equal(seen.length - before, 3, 'not asked again');
     } finally { mode.down = false; resetLookupState(); }
   });
 
-  test('HS search by code prefix (with or without the dot) and by words', async () => {
-    const codes = async (q: string) => (await a.get(`/reference/hs-codes?q=${encodeURIComponent(q)}`)).body.results.map((h: { code: string }) => h.code);
+  test('HS search: code prefix (with or without the dot), or words matched as prefixes', async () => {
+    const codes = async (q: string) => (await a.get(R(`/hs?q=${encodeURIComponent(q)}`))).body.results.map((h: { code: string }) => h.code);
+    assert.ok((await codes('1701')).includes('1701.9910'), 'q=1701 finds 1701.9910');
     assert.deepEqual(await codes('1701'), ['1701.1400', '1701.9910']);
     assert.deepEqual(await codes('1701.99'), ['1701.9910']);
     assert.deepEqual(await codes('17019910'), ['1701.9910']);
-    assert.deepEqual(await codes('sugar'), ['1701.1400', '1701.9910']);
+    const sugar = (await a.get(R('/hs?q=sugar'))).body.results;
+    assert.ok(sugar.length > 0 && sugar.every((h: { description: string }) => /sugar/i.test(h.description)), 'q=sugar finds sugar');
+    assert.deepEqual(sugar.map((h: { code: string }) => h.code).sort(), ['1701.1400', '1701.9910']);
     assert.deepEqual(await codes('SUGAR refined'), ['1701.9910']);
-    assert.deepEqual(await codes('100%'), ['9999.0001'], '% is matched literally');
+    assert.deepEqual((await codes('sug')).sort(), ['1701.1400', '1701.9910'], 'words match as prefixes');
+    assert.deepEqual(await codes('100% cotton'), ['9999.0001']);
+    assert.deepEqual(await codes("sugar' | !raw:*"), (await codes('sugar raw')), 'tsquery operators are ignored');
     assert.deepEqual(await codes('__'), []);
-    assert.equal((await a.get('/reference/hs-codes?q=textile&limit=5')).body.results.length, 5);
-    const r = await a.get('/reference/hs-codes?q=laptop');
+    assert.equal((await a.get(R('/hs?q=textile'))).body.results.length, 20, 'top 20 by default');
+    assert.equal((await a.get(R('/hs?q=textile&limit=5'))).body.results.length, 5);
+    const r = await a.get(R('/hs?q=laptop'));
     assert.deepEqual(r.body, { source: 'pral', results: [{ code: '8471.3020', description: 'Laptops and notebooks' }] });
     assert.equal(r.headers.get('cache-control'), 'private, max-age=300');
   });
 
   test('HS UOM is looked up once, then cached and refreshed nightly', async () => {
     const before = callsTo('/pdi/v2/HS_UOM').length;
-    const r = (await a.get('/reference/hs-codes/2716.0000/uoms')).body;
+    const r = (await a.get(R('/uom-for-hs?hs=2716.0000'))).body;
     assert.deepEqual([r.source, r.uoms], ['pral', ['KWH']]);
-    assert.deepEqual((await a.get('/reference/hs-codes/2716.0000/uoms')).body.uoms, ['KWH']);
+    assert.deepEqual((await a.get(R('/uom-for-hs?hs=2716.0000'))).body.uoms, ['KWH']);
     assert.equal(callsTo('/pdi/v2/HS_UOM').length, before + 1);
     assert.equal(callsTo('/pdi/v2/HS_UOM').at(-1)!.query.get('annexure_id'), '3');
 
@@ -297,11 +393,53 @@ describe('lookups', () => {
     assert.equal(callsTo('/pdi/v2/HS_UOM').length, before + 2);
   });
 
+  test('a parameterised lookup expires after 12 hours; if FBR then fails the old copy is served', async () => {
+    resetLookupState();
+    const hsUom = and(eq(s.refLists.kind, 'HS_UOM'), eq(s.refLists.params, 'hs=2716.0000'));
+    const age = (hours: number) => tdb.admin.update(s.refLists).set({ fetchedAt: new Date(Date.now() - hours * 3600_000) }).where(hsUom);
+    const calls = () => callsTo('/pdi/v2/HS_UOM').length;
+    const before = calls();
+
+    await age(11);
+    assert.deepEqual((await a.get(R('/uom-for-hs?hs=2716.0000'))).body.uoms, ['KWH']);
+    assert.equal(calls(), before, '11 hours old: still fresh');
+
+    await age(13);
+    assert.deepEqual((await a.get(R('/uom-for-hs?hs=2716.0000'))).body.uoms, ['KWH']);
+    assert.equal(calls(), before + 1, '13 hours old: fetched again');
+    const [row] = await tdb.admin.select().from(s.refLists).where(hsUom);
+    assert.ok(Date.now() - row!.fetchedAt.getTime() < 60_000);
+
+    await age(13);
+    mode.down = true;
+    try {
+      const r = (await a.get(R('/uom-for-hs?hs=2716.0000'))).body;
+      assert.deepEqual([r.source, r.uoms], ['pral', ['KWH']], 'stale copy served');
+      assert.equal(calls(), before + 2);
+    } finally { mode.down = false; resetLookupState(); }
+
+    // Lists without parameters change only with the nightly refresh.
+    await tdb.admin.update(s.refLists).set({ fetchedAt: new Date(Date.now() - 48 * 3600_000) }).where(eq(s.refLists.kind, 'provinces'));
+    const prov = callsTo('/pdi/v1/provinces').length;
+    assert.equal((await a.get(R('/provinces'))).body.items.length, 2);
+    assert.equal(callsTo('/pdi/v1/provinces').length, prov);
+  });
+
+  test('an empty answer on refetch keeps the cached copy', async () => {
+    resetLookupState();
+    await tdb.admin.update(s.refLists).set({ fetchedAt: new Date(Date.now() - 13 * 3600_000) })
+      .where(and(eq(s.refLists.kind, 'HS_UOM'), eq(s.refLists.params, 'hs=2716.0000')));
+    mode.empty = true;
+    try {
+      assert.deepEqual((await a.get(R('/uom-for-hs?hs=2716.0000'))).body.uoms, ['KWH']);
+    } finally { mode.empty = false; resetLookupState(); }
+  });
+
   test('a slow FBR does not hold a lookup past 5 seconds', { timeout: 15_000 }, async () => {
     mode.slowHsUom = true;
     try {
       const t = Date.now();
-      const r = (await a.get('/reference/hs-codes/1701.9910/uoms')).body;
+      const r = (await a.get(R('/uom-for-hs?hs=1701.9910'))).body;
       assert.equal(r.source, 'none');
       assert.ok(Date.now() - t < 6000, `took ${Date.now() - t} ms`);
     } finally { mode.slowHsUom = false; resetLookupState(); }
@@ -309,39 +447,41 @@ describe('lookups', () => {
 
   test('SRO schedules and items for a rate, from the nightly cache', async () => {
     const calls = fbrCalls();
-    const sched = (await a.get('/reference/sro-schedules?rateId=280&province=Punjab')).body;
+    const sched = (await a.get(R('/sro?rateId=280'))).body;
     assert.deepEqual(sched.schedules, [{ id: 389, serNo: 1, desc: 'EIGHTH SCHEDULE Table 1' }]);
-    assert.deepEqual((await a.get('/reference/sro-items?sroId=389')).body.items, [{ id: 17853, desc: '50' }]);
-    assert.deepEqual((await a.get('/reference/sro-schedules?rateId=734&province=Punjab')).body.schedules, []);
+    assert.deepEqual((await a.get(R('/sro-items?sroId=389'))).body.items, [{ id: 17853, desc: '50' }]);
+    assert.deepEqual((await a.get(R('/sro?rateId=734&province=Punjab'))).body.schedules, []);
     assert.equal(fbrCalls(), calls);
   });
 
-  test('provinces and UOMs', async () => {
-    assert.deepEqual((await a.get('/reference/provinces')).body.provinces, [{ code: 7, desc: 'PUNJAB' }, { code: 8, desc: 'SINDH' }]);
-    assert.deepEqual((await a.get('/reference/uoms')).body.uoms.map((u: { description: string }) => u.description), ['KG', 'Numbers, pieces, units', 'KWH']);
+  test('lists without parameters', async () => {
+    const items = async (kind: string) => (await a.get(R(`/${kind}`))).body.items;
+    assert.deepEqual(await items('provinces'), [{ code: 7, desc: 'PUNJAB' }, { code: 8, desc: 'SINDH' }]);
+    assert.deepEqual((await items('uom')).map((u: { description: string }) => u.description), ['KG', 'Numbers, pieces, units', 'KWH']);
+    assert.deepEqual(await items('doctypecode'), [{ id: 4, desc: 'Sale Invoice' }, { id: 9, desc: 'Debit Note' }]);
+    assert.deepEqual(await items('sroitemcode'), [{ id: 724, desc: '9' }, { id: 728, desc: '1' }]);
+    assert.equal((await items('transtypecode')).length, 4);
   });
 
   test('no response, header or cached row contains the token', async () => {
-    const paths = ['/reference/provinces', '/reference/uoms', '/reference/sale-types?province=Punjab', '/reference/hs-codes?q=sugar',
-      '/reference/hs-codes/2716.0000/uoms', '/reference/sro-schedules?rateId=280&province=Punjab', '/reference/sro-items?sroId=389', '/reference/status'];
     const [cred] = await tdb.admin.select().from(s.referenceCredential);
-    for (const p of paths) {
-      const r = await a.get(p);
+    for (const p of PATHS) {
+      const r = await a.get(R(p));
       assert.equal(r.status, 200, p);
       const all = r.text + JSON.stringify([...r.headers]);
       assert.ok(!all.includes(REF_TOKEN) && !all.includes(cred!.ciphertext), p);
     }
-    const status = (await a.get('/reference/status')).body;
-    assert.equal(status.tokenConfigured, true);
+    const status = (await a.get(R('/status'))).body;
+    assert.deepEqual([status.tokenConfigured, status.tokenSource], [true, 'platform']);
     assert.equal(status.hsCodes.count, HS.length);
     const dump = JSON.stringify(await Promise.all([tdb.admin.select().from(s.refLists), tdb.admin.select().from(s.auditLog)]));
-    assert.ok(!dump.includes(REF_TOKEN));
+    assert.ok(!dump.includes(REF_TOKEN) && !dump.includes(CUSTOMER_TOKEN));
   });
 
   test('reference-cli status and refresh', async () => {
     const st = await cli(['status']);
     assert.equal(st.code, 0, st.out);
-    assert.equal(JSON.parse(st.out).tokenConfigured, true);
+    assert.deepEqual([JSON.parse(st.out).tokenConfigured, JSON.parse(st.out).tokenSource], [true, 'platform']);
     const r = await cli(['refresh', '2026-10-01']);
     assert.equal(r.code, 0, r.out);
     assert.equal(JSON.parse(r.out).date, '2026-10-01');

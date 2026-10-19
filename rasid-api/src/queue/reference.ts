@@ -8,18 +8,20 @@ import { Queue, Worker } from 'bullmq';
 import { config } from '../config.js';
 import { refreshReference, type RefreshSummary } from '../reference/refresh.js';
 import { hsCodeCount } from '../reference/store.js';
-import { loadReferenceToken } from '../reference/token.js';
+import { referenceToken, rejectReferenceToken } from '../reference/token.js';
 import { redisConnection } from './redis.js';
 
 export const REFERENCE_QUEUE = 'reference-refresh';
 
 const log = (o: Record<string, unknown>) => console.log(JSON.stringify({ at: new Date().toISOString(), ...o }));
 
-/** One refresh; skipped (not failed) when Rasid's reference token isn't set. */
+/** One refresh; skipped (not failed) when there's no token to use (token.ts). */
 export async function runReferenceRefresh(): Promise<RefreshSummary | { skipped: string }> {
-  const token = await loadReferenceToken();
-  if (!token) return { skipped: 'No reference token. Set it with: node dist/reference-cli.js set-token' };
-  return refreshReference({ token });
+  const t = await referenceToken();
+  if (!t) return { skipped: 'No reference token, and no customer token has passed a test. Set one with: node dist/reference-cli.js set-token' };
+  const summary = await refreshReference({ token: t.token, source: t.source });
+  if (summary.stoppedBy401) await rejectReferenceToken(t);
+  return summary;
 }
 
 export interface ReferenceWorkerOptions { cron?: string; runNowIfEmpty?: boolean }
@@ -41,6 +43,8 @@ export async function startReferenceWorker(opts: ReferenceWorkerOptions = {}) {
   const worker = new Worker(REFERENCE_QUEUE, async () => {
     const result = await runReferenceRefresh();
     log({ event: 'reference_refresh', ...result });
+    // The cached copy of each failed list is kept; say so where operators look.
+    for (const f of 'failed' in result ? result.failed : []) console.warn(JSON.stringify({ at: new Date().toISOString(), level: 'warn', event: 'reference_list_kept', ...f }));
     if ('stoppedBy401' in result && result.stoppedBy401) throw new Error('FBR rejected the reference token (401)');
     return result;
   }, { connection: workerRedis, concurrency: 1 });

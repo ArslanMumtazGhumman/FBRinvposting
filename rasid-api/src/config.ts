@@ -29,7 +29,9 @@ export const config = {
   /** How often a batch progress stream (SSE) checks for changes. */
   batchPollMs: Number(process.env.BATCH_POLL_MS ?? 1000),
   /** When the worker refreshes PRAL reference lists (cron, Pakistan time). */
-  referenceRefreshCron: process.env.REFERENCE_REFRESH_CRON ?? '30 2 * * *',
+  referenceRefreshCron: process.env.REFERENCE_REFRESH_CRON ?? '0 2 * * *',
+  /** How long a cached parameterised lookup (rates, HS→UOM, SRO) is served before PRAL is asked again. */
+  referenceTtlHours: Number(process.env.REFERENCE_TTL_HOURS ?? 12),
 };
 
 if (config.vaultKeys[config.vaultActiveKey]?.length !== 32) {
