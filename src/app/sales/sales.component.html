@@ -1,0 +1,440 @@
+<main class="sales-page">
+  @if (page() === 'list') {
+    <section class="sales-heading">
+      <div>
+        <p class="sales-eyebrow">YOUR SHOP</p>
+        <h1>Sales</h1>
+        <p class="sales-intro">See what you’ve sold and what’s still to collect.</p>
+      </div>
+      <button class="button button-primary new-sale-button" type="button" (click)="startSale()">
+        <span aria-hidden="true">＋</span> New sale
+      </button>
+    </section>
+
+    <div class="period-switch" role="group" aria-label="Filter sales by period">
+      <button type="button" [class.selected]="period() === 'today'" (click)="setPeriod('today')">Today</button>
+      <button type="button" [class.selected]="period() === 'week'" (click)="setPeriod('week')">Week</button>
+      <button type="button" [class.selected]="period() === 'month'" (click)="setPeriod('month')">Month</button>
+    </div>
+
+    <section class="sales-summary-grid" aria-label="Sales summary">
+      <article class="summary-card">
+        <span class="summary-caption">Today's sales</span>
+        <strong>{{ currency(summary().total) }}</strong>
+        <span class="summary-footnote">For this {{ period() }}</span>
+      </article>
+      <article class="summary-card">
+        <span class="summary-caption">Transactions</span>
+        <strong>{{ summary().transactions }}</strong>
+        <span class="summary-footnote">Sales recorded</span>
+      </article>
+      <article class="summary-card">
+        <span class="summary-caption">Credit sales</span>
+        <strong>{{ currency(summary().credit) }}</strong>
+        <span class="summary-footnote">Unpaid credit sales</span>
+      </article>
+      <article class="summary-card">
+        <span class="summary-caption">Cash received</span>
+        <strong>{{ currency(summary().received) }}</strong>
+        <span class="summary-footnote">Paid so far</span>
+      </article>
+    </section>
+
+    <section class="sales-list-panel" aria-labelledby="sales-list-title">
+      <div class="sales-list-heading">
+        <div>
+          <h2 id="sales-list-title">Recent sales</h2>
+          <p>Your latest customer sales.</p>
+        </div>
+        <span class="sales-count">{{ visibleSales().length }} sales</span>
+      </div>
+      @if (visibleSales().length) {
+        <div class="sale-list">
+          @for (sale of visibleSales(); track sale.id) {
+            <a class="sale-row" [routerLink]="['/sales', sale.id]">
+              <span class="sale-symbol" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M4 5.5h16v14H4zM8 9h8M8 12.5h8M8 16h4" /></svg>
+              </span>
+              <span class="sale-primary">
+                <strong>Sale #{{ sale.number }}</strong>
+                <small>{{ time(sale.createdAt) }} <span aria-hidden="true">·</span> {{ sale.customerName }}</small>
+              </span>
+              <span class="sale-amount">{{ currency(sale.total) }}</span>
+              <span class="status-pill" [class.paid]="sale.status === 'PAID'" [class.partial]="sale.status === 'PARTIAL'" [class.credit]="sale.status === 'CREDIT'">
+                {{ statusText(sale.status) }}
+              </span>
+              <svg class="row-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m7 4 6 6-6 6" /></svg>
+            </a>
+          }
+        </div>
+      } @else {
+        <div class="empty-sales">
+          <span class="empty-icon" aria-hidden="true">↗</span>
+          <strong>No sales for this period yet</strong>
+          <span>When you record a sale, it will show up here.</span>
+          <button class="button button-secondary" type="button" (click)="startSale()">Create a sale</button>
+        </div>
+      }
+    </section>
+  } @else if (page() === 'new') {
+    <div class="new-sale-page">
+      <div class="sale-page-title">
+        <button class="back-button" type="button" routerLink="/sales" aria-label="Back to sales">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6M9 12h11" /></svg>
+        </button>
+        <div>
+          <p class="sales-eyebrow">SALES</p>
+          <h1>New sale</h1>
+        </div>
+      </div>
+
+      <div class="sale-workspace">
+        <section class="products-panel" aria-labelledby="products-title">
+          <div class="products-heading">
+            <div>
+              <h2 id="products-title">Choose products</h2>
+              <p>Tap a product to add it to this sale.</p>
+            </div>
+            <span class="product-count">{{ filteredProducts().length }} products</span>
+          </div>
+
+          <label class="product-search">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3" /><path d="m16 16 4.5 4.5" /></svg>
+            <input
+              type="search"
+              placeholder="Search product or category"
+              aria-label="Search products by name or category"
+              [ngModel]="searchQuery()"
+              (ngModelChange)="searchQuery.set($event)"
+            />
+            @if (searchQuery()) {
+              <button type="button" class="clear-search" aria-label="Clear product search" (click)="searchQuery.set('')">×</button>
+            }
+          </label>
+
+          <div class="category-chips" role="group" aria-label="Filter products by category">
+            @for (item of categories(); track item) {
+              <button type="button" [class.selected]="category() === item" (click)="chooseCategory(item)">{{ item }}</button>
+            }
+          </div>
+
+          <h3 class="popular-heading">{{ searchQuery() || category() !== 'All' ? 'Products' : 'Popular products' }}</h3>
+          @if (service.loadingProducts() && !service.products().length) {
+            <div class="empty-products"><strong>Loading products…</strong></div>
+          } @else if (service.catalogError()) {
+            <div class="empty-products" role="alert">
+              <strong>Products could not be loaded</strong>
+              <span>{{ service.catalogError() }}</span>
+            </div>
+          } @else if (filteredProducts().length) {
+            <div class="product-grid">
+              @for (product of filteredProducts(); track product.id) {
+                <button
+                  class="product-card"
+                  type="button"
+                  [disabled]="product.stock <= 0"
+                  [attr.aria-label]="product.stock <= 0 ? product.name + ', out of stock' : 'Add ' + product.name + ', ' + currency(product.salePrice)"
+                  (click)="addProduct(product)"
+                >
+                  <span class="product-art" aria-hidden="true">
+                    <svg viewBox="0 0 32 32">
+                      <path d="M12 4h8v4l3 3v16H9V11l3-3V4Z" />
+                      <path d="M12 8h8M9 13h14M13 18h6" />
+                    </svg>
+                  </span>
+                  <span class="product-info">
+                    <strong>{{ product.name }}</strong>
+                    <small>{{ product.category }} · {{ product.stock }} in stock</small>
+                    <span>{{ currency(product.salePrice) }}</span>
+                  </span>
+                  <span class="product-add" aria-hidden="true">＋</span>
+                </button>
+              }
+            </div>
+          } @else {
+            <div class="empty-products">
+              <strong>No products found</strong>
+              <span>Try another name or category.</span>
+            </div>
+          }
+        </section>
+
+        <section class="cart-panel" id="current-sale" aria-labelledby="current-sale-title">
+          <div class="cart-heading">
+            <div>
+              <h2 id="current-sale-title">Current sale</h2>
+              <p>{{ service.cart().length }} {{ service.cart().length === 1 ? 'item' : 'items' }}</p>
+            </div>
+            @if (service.cart().length) {
+              <button class="clear-cart" type="button" (click)="service.resetCart()">Clear</button>
+            }
+          </div>
+
+          <div class="customer-field">
+            <span class="customer-label">Customer</span>
+            <button class="customer-select" type="button" (click)="openCustomerSheet()">
+              <span class="customer-initials">{{ service.selectedCustomer()?.name?.slice(0, 1) ?? 'W' }}</span>
+              <span>{{ service.selectedCustomer()?.name ?? 'Walk-in Customer' }}</span>
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4" /></svg>
+            </button>
+          </div>
+
+          @if (service.cart().length) {
+            <div class="cart-items">
+              @for (item of service.cart(); track item.productId) {
+                <article class="cart-item">
+                  <div class="cart-item-copy">
+                    <strong>{{ item.name }}</strong>
+                    <small>{{ currency(item.unitPrice) }} each</small>
+                    <span class="cart-line-total">{{ currency(item.lineTotal) }}</span>
+                  </div>
+                  <div class="quantity-controls" [attr.aria-label]="'Quantity for ' + item.name">
+                    <button type="button" [attr.aria-label]="'Decrease ' + item.name" (click)="service.changeQuantity(item.productId, -1)">−</button>
+                    <span aria-live="polite">{{ item.quantity }}</span>
+                    <button type="button" [attr.aria-label]="'Increase ' + item.name" (click)="service.changeQuantity(item.productId, 1)">＋</button>
+                  </div>
+                  <button class="remove-item" type="button" [attr.aria-label]="'Remove ' + item.name" (click)="service.removeFromCart(item.productId)">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 14h10l1-14M9 7V4h6v3" /></svg>
+                  </button>
+                </article>
+              }
+            </div>
+          } @else {
+            <div class="empty-cart">
+              <span class="empty-cart-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M4 5h2l2 11h10l2-8H7M10 20h.01M17 20h.01" /></svg>
+              </span>
+              <strong>Your sale is empty</strong>
+              <span>Choose a product to get started.</span>
+            </div>
+          }
+
+          <div class="cart-total">
+            <span>Subtotal</span><strong>{{ currency(service.subtotal()) }}</strong>
+            <span class="total-label">Total</span><strong class="total-value">{{ currency(service.total()) }}</strong>
+          </div>
+          @if (errorMessage()) {
+            <p class="inline-error" role="alert">{{ errorMessage() }}</p>
+          }
+          <button class="button button-primary complete-button desktop-complete" type="button" [disabled]="!service.cart().length" (click)="openPaymentSheet()">
+            Complete sale <span aria-hidden="true">→</span>
+          </button>
+          <p class="cart-hint">Payment details come next. Cash is selected by default.</p>
+        </section>
+      </div>
+
+      <div class="mobile-sale-bar">
+        <a class="mobile-cart-link" href="#current-sale">
+          <span>{{ service.cart().length }} {{ service.cart().length === 1 ? 'item' : 'items' }}</span>
+          <strong>{{ currency(service.total()) }}</strong>
+        </a>
+        <button class="button button-primary" type="button" [disabled]="!service.cart().length" (click)="openPaymentSheet()">Complete sale <span aria-hidden="true">→</span></button>
+      </div>
+    </div>
+  } @else if (page() === 'success') {
+    <section class="sale-success">
+      @if (service.getSale(successSaleId()); as sale) {
+        <span class="success-check" aria-hidden="true">✓</span>
+        <p class="sales-eyebrow">ALL DONE</p>
+        <h1>Sale completed</h1>
+        <p class="success-total">{{ currency(sale.total) }}</p>
+        <div class="success-receipt">
+          <span>{{ sale.customerName }}</span>
+          <span>{{ sale.status === 'PAID' ? 'Paid' : statusText(sale.status) }}{{ sale.paid ? ' · ' + currency(sale.paid) : '' }}</span>
+          <span>Sale #{{ sale.number }}</span>
+        </div>
+        @if (sale.balance > 0) {
+          <p class="success-due">Still to collect: <strong>{{ currency(sale.balance) }}</strong></p>
+        }
+        <div class="success-actions">
+          <button class="button button-primary" type="button" (click)="startSale()">New sale</button>
+          <button class="button button-secondary" type="button" [routerLink]="['/sales', sale.id]">View sale</button>
+        </div>
+      } @else {
+        <span class="success-check" aria-hidden="true">✓</span>
+        <h1>Sale completed</h1>
+        <button class="button button-primary" type="button" routerLink="/sales">Back to sales</button>
+      }
+    </section>
+  } @else {
+    @if (currentSale; as sale) {
+      <section class="sale-details-page">
+        <div class="sale-page-title">
+          <button class="back-button" type="button" routerLink="/sales" aria-label="Back to sales">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6M9 12h11" /></svg>
+          </button>
+          <div>
+            <p class="sales-eyebrow">SALE DETAILS</p>
+            <h1>Sale #{{ sale.number }}</h1>
+          </div>
+          <span class="status-pill detail-status" [class.paid]="sale.status === 'PAID'" [class.partial]="sale.status === 'PARTIAL'" [class.credit]="sale.status === 'CREDIT'">{{ statusText(sale.status) }}</span>
+        </div>
+        <section class="detail-card">
+          <div class="detail-facts">
+            <div><span>Date and time</span><strong>{{ dateTime(sale.createdAt) }}</strong></div>
+            <div><span>Customer</span><strong>{{ sale.customerName }}</strong></div>
+            <div><span>Payment method</span><strong>{{ sale.payments.length ? (sale.payments[0].method | titlecase) : 'Credit' }}</strong></div>
+            <div><span>Payment status</span><strong>{{ statusText(sale.status) }}</strong></div>
+          </div>
+          <h2>Items sold</h2>
+          <div class="detail-items">
+            @for (item of sale.items; track item.productId) {
+              <div class="detail-item">
+                <div><strong>{{ item.name }}</strong><small>{{ item.quantity }} × {{ currency(item.unitPrice) }}</small></div>
+                <strong>{{ currency(item.lineTotal) }}</strong>
+              </div>
+            }
+          </div>
+          <div class="detail-totals">
+            <div><span>Subtotal</span><strong>{{ currency(sale.subtotal) }}</strong></div>
+            <div class="detail-total"><span>Total</span><strong>{{ currency(sale.total) }}</strong></div>
+            @if (sale.balance > 0) {
+              <div><span>Paid</span><strong>{{ currency(sale.paid) }}</strong></div>
+              <div class="detail-due"><span>Remaining</span><strong>{{ currency(sale.balance) }}</strong></div>
+            }
+          </div>
+          @if (sale.payments.length > 1) {
+            <div class="payment-history">
+              <h3>Payments received</h3>
+              @for (payment of sale.payments; track payment.receivedAt.getTime()) {
+                <div><span>{{ payment.method | titlecase }} · {{ dateTime(payment.receivedAt) }}</span><strong>{{ currency(payment.amount) }}</strong></div>
+              }
+            </div>
+          }
+          <div class="detail-actions">
+            @if (sale.balance > 0 && sale.customerId) {
+              <button class="button button-primary" type="button" (click)="openReceivePayment()">Receive payment</button>
+            }
+            <button class="button button-secondary" type="button" (click)="startSale()">New sale</button>
+          </div>
+        </section>
+      </section>
+    } @else {
+      <section class="not-found">
+        <h1>Sale not found</h1>
+        <p>It may have been removed or the link may be incorrect.</p>
+        <button class="button button-primary" type="button" routerLink="/sales">Back to sales</button>
+      </section>
+    }
+  }
+</main>
+
+@if (showCustomerSheet()) {
+  <div class="sheet-backdrop" (click)="closeCustomerSheet()">
+    <section class="bottom-sheet customer-sheet" role="dialog" aria-modal="true" aria-labelledby="customer-sheet-title" (click)="$event.stopPropagation()">
+      <div class="sheet-handle"></div>
+      <div class="sheet-heading">
+        <div><p class="sales-eyebrow">THIS SALE</p><h2 id="customer-sheet-title">Choose customer</h2></div>
+        <button class="sheet-close" type="button" aria-label="Close customer selection" (click)="closeCustomerSheet()">×</button>
+      </div>
+      @if (showNewCustomerForm()) {
+        <div class="new-customer-form">
+          <label>Name<input type="text" autocomplete="name" placeholder="Customer name" [ngModel]="customerName()" (ngModelChange)="customerName.set($event)" /></label>
+          <label>Phone <span>(optional)</span><input type="tel" autocomplete="tel" inputmode="tel" placeholder="03XX XXXXXXX" [ngModel]="customerPhone()" (ngModelChange)="customerPhone.set($event)" /></label>
+          @if (errorMessage()) { <p class="inline-error" role="alert">{{ errorMessage() }}</p> }
+          <button class="button button-primary" type="button" (click)="saveNewCustomer()">Save customer</button>
+          <button class="plain-button" type="button" (click)="showNewCustomerForm.set(false)">Back to customers</button>
+        </div>
+      } @else {
+        <label class="sheet-search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.3" /><path d="m16 16 4.5 4.5" /></svg>
+          <input type="search" placeholder="Search customer" aria-label="Search customers" [ngModel]="customerQuery()" (ngModelChange)="customerQuery.set($event)" />
+        </label>
+        <div class="customer-options">
+          <button class="customer-option walk-in-option" type="button" (click)="selectCustomer(null)">
+            <span class="customer-initials">W</span><span><strong>Walk-in Customer</strong><small>No customer details needed</small></span>
+            @if (!service.selectedCustomer()) { <span class="selected-check" aria-label="Selected">✓</span> }
+          </button>
+          @for (customer of filteredCustomers(); track customer.id) {
+            <button class="customer-option" type="button" (click)="selectCustomer(customer)">
+              <span class="customer-initials">{{ customer.name.slice(0, 1) }}</span>
+              <span><strong>{{ customer.name }}</strong><small>{{ customer.phone || 'No phone number' }} · Owes {{ currency(customer.balance) }}</small></span>
+              @if (service.selectedCustomer()?.id === customer.id) { <span class="selected-check" aria-label="Selected">✓</span> }
+            </button>
+          }
+        </div>
+        <button class="button button-secondary add-customer-button" type="button" (click)="errorMessage.set(''); showNewCustomerForm.set(true)">＋ Add new customer</button>
+      }
+    </section>
+  </div>
+}
+
+@if (showPaymentSheet()) {
+  <div class="sheet-backdrop" (click)="showPaymentSheet.set(false)">
+    <section class="bottom-sheet payment-sheet" role="dialog" aria-modal="true" aria-labelledby="payment-sheet-title" (click)="$event.stopPropagation()">
+      <div class="sheet-handle"></div>
+      <div class="sheet-heading">
+        <div><p class="sales-eyebrow">{{ sheetMode() === 'sale' ? 'PAYMENT' : 'COLLECT PAYMENT' }}</p><h2 id="payment-sheet-title">{{ sheetMode() === 'sale' ? 'Complete sale' : 'Receive payment' }}</h2></div>
+        <button class="sheet-close" type="button" aria-label="Close payment" (click)="showPaymentSheet.set(false)">×</button>
+      </div>
+      <div class="payment-total-box">
+        <span>{{ sheetMode() === 'sale' ? 'TOTAL' : 'REMAINING BALANCE' }}</span>
+        <strong>{{ currency(sheetMode() === 'sale' ? total : (currentSale?.balance ?? 0)) }}</strong>
+        @if (sheetMode() === 'sale') {
+          <span class="payment-customer">
+            {{ service.selectedCustomer()?.name ?? 'Walk-in Customer' }}
+            @if (service.selectedCustomer()) {
+              <button type="button" (click)="chooseCustomerForPayment()">Change</button>
+            }
+          </span>
+        }
+      </div>
+
+      @if (sheetMode() === 'sale') {
+        <fieldset class="payment-methods">
+          <legend>How is the customer paying?</legend>
+          <div class="payment-method-grid">
+            <button type="button" [class.selected]="paymentMethod() === 'cash'" (click)="choosePaymentMethod('cash')"><span aria-hidden="true">▣</span>Cash</button>
+            <button type="button" [class.selected]="paymentMethod() === 'bank'" (click)="choosePaymentMethod('bank')"><span aria-hidden="true">▤</span>Bank</button>
+            <button type="button" [class.selected]="paymentMethod() === 'jazzcash'" (click)="choosePaymentMethod('jazzcash')"><span aria-hidden="true">◈</span>JazzCash</button>
+            <button type="button" [class.selected]="paymentMethod() === 'credit'" (click)="choosePaymentMethod('credit')"><span aria-hidden="true">◷</span>Credit</button>
+            <button type="button" [class.selected]="paymentMethod() === 'partial'" (click)="choosePaymentMethod('partial')"><span aria-hidden="true">◐</span>Partial</button>
+          </div>
+        </fieldset>
+      } @else {
+        <fieldset class="payment-methods">
+          <legend>Payment received by</legend>
+          <div class="payment-method-grid receive-method-grid">
+            <button type="button" [class.selected]="paymentMethod() === 'cash'" (click)="choosePaymentMethod('cash')"><span aria-hidden="true">▣</span>Cash</button>
+            <button type="button" [class.selected]="paymentMethod() === 'bank'" (click)="choosePaymentMethod('bank')"><span aria-hidden="true">▤</span>Bank</button>
+            <button type="button" [class.selected]="paymentMethod() === 'jazzcash'" (click)="choosePaymentMethod('jazzcash')"><span aria-hidden="true">◈</span>JazzCash</button>
+          </div>
+        </fieldset>
+      }
+
+      @if (paymentMethod() !== 'credit') {
+        <label class="amount-field">
+          <span>Amount received</span>
+          <span class="amount-input-wrap"><span>Rs</span><input type="number" min="0" step="1" inputmode="numeric" [max]="sheetMode() === 'receive' ? (currentSale?.balance ?? total) : total" [ngModel]="amountReceived()" (ngModelChange)="amountReceived.set(+$event)" /></span>
+        </label>
+        <button class="full-amount-button" type="button" (click)="useFullAmount()">Use full amount</button>
+        @if (sheetMode() === 'receive' && receiveQuickAmounts.length > 1) {
+          <div class="quick-amounts" aria-label="Quick payment amounts">
+            @for (amount of receiveQuickAmounts; track amount) {
+              <button type="button" (click)="amountReceived.set(amount)">
+                {{ amount === currentSale?.balance ? 'Full' : currency(amount) }}
+              </button>
+            }
+          </div>
+        }
+      }
+
+      @if ((paymentMethod() === 'credit' || paymentMethod() === 'partial' || amountReceived() < total) && sheetMode() === 'sale') {
+        <div class="payment-customer-required">
+          <span>Customer</span>
+          <button type="button" (click)="chooseCustomerForPayment()">
+            {{ service.selectedCustomer()?.name ?? 'Choose customer' }} <span aria-hidden="true">→</span>
+          </button>
+        </div>
+      }
+      @if (paymentMethod() === 'partial' && sheetMode() === 'sale' && amountReceived() > 0) {
+        <div class="remaining-due"><span>Remaining due</span><strong>{{ currency(remainingAmount) }}</strong></div>
+      }
+      @if (paymentError()) { <p class="inline-error" role="alert">{{ paymentError() }}</p> }
+      <button class="button button-primary save-payment-button" type="button" (click)="sheetMode() === 'sale' ? saveSale() : saveReceivedPayment()">
+        {{ sheetMode() === 'sale' ? (paymentMethod() === 'credit' ? 'Save credit sale' : 'Save sale') : 'Receive payment' }}
+        <span aria-hidden="true">→</span>
+      </button>
+    </section>
+  </div>
+}

@@ -1,0 +1,119 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  STAFF
+}
+
+enum StockMovementType {
+  OPENING
+  PURCHASE
+  SALE
+  SALE_RETURN
+  PURCHASE_RETURN
+  DAMAGE
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+}
+
+model User {
+  id           String          @id @default(uuid()) @db.Uuid
+  name         String          @db.VarChar(120)
+  email        String          @unique @db.VarChar(254)
+  passwordHash String          @db.VarChar(255)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+  memberships  Membership[]
+  movements    StockMovement[] @relation("MovementCreator")
+}
+
+model Business {
+  id          String          @id @default(uuid()) @db.Uuid
+  name        String          @db.VarChar(160)
+  phone       String?         @db.VarChar(40)
+  address     String?         @db.VarChar(500)
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  memberships Membership[]
+  categories  Category[]
+  products    Product[]
+  movements   StockMovement[]
+}
+
+model Category {
+  id         String    @id @default(uuid()) @db.Uuid
+  businessId String    @db.Uuid
+  name       String    @db.VarChar(80)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  business   Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  products   Product[]
+
+  @@unique([businessId, name])
+  @@unique([id, businessId])
+  @@index([businessId])
+}
+
+model Product {
+  id                String          @id @default(uuid()) @db.Uuid
+  businessId        String          @db.Uuid
+  categoryId        String          @db.Uuid
+  name              String          @db.VarChar(160)
+  sku               String?         @db.VarChar(80)
+  unit              String          @default("unit") @db.VarChar(40)
+  purchasePrice     Decimal         @db.Decimal(12, 2)
+  salePrice         Decimal         @db.Decimal(12, 2)
+  lowStockThreshold Int             @default(0)
+  isActive          Boolean         @default(true)
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  business          Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  category          Category        @relation(fields: [categoryId, businessId], references: [id, businessId], onDelete: Restrict)
+  movements         StockMovement[]
+
+  @@unique([businessId, sku])
+  @@unique([id, businessId])
+  @@index([businessId, categoryId, isActive])
+  @@index([businessId, name])
+}
+
+model StockMovement {
+  id            String            @id @default(uuid()) @db.Uuid
+  businessId    String            @db.Uuid
+  productId     String            @db.Uuid
+  type          StockMovementType
+  quantity      Decimal           @db.Decimal(12, 3)
+  referenceType String?           @db.VarChar(80)
+  referenceId   String?           @db.VarChar(120)
+  note          String?           @db.VarChar(500)
+  createdAt     DateTime          @default(now())
+  createdById   String?           @db.Uuid
+  business      Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  product       Product           @relation(fields: [productId, businessId], references: [id, businessId], onDelete: Restrict)
+  createdBy     User?             @relation("MovementCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([businessId, productId, createdAt])
+  @@index([createdById])
+}
+
+model Membership {
+  id         String         @id @default(uuid()) @db.Uuid
+  userId     String         @db.Uuid
+  businessId String         @db.Uuid
+  role       MembershipRole
+  createdAt  DateTime       @default(now())
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  business   Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, businessId])
+  @@index([businessId, role])
+  @@index([userId])
+}

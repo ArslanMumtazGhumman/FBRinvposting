@@ -1,0 +1,303 @@
+@if (auth.isAuthenticated) {
+<div class="app-shell">
+  <aside class="desktop-sidebar" aria-label="Main navigation">
+    <a class="brand" href="/" aria-label="DukaanOS home">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 32 32" fill="none">
+          <path d="M7 13.5 9.2 7h13.6l2.2 6.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+          <path d="M6 13.5h20v12H6z" fill="currentColor" opacity=".16" />
+          <path d="M6 13.5h20v12H6zM11 25.5v-7h10v7" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" />
+          <path d="M11 13.5v2M16 13.5v2M21 13.5v2" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+        </svg>
+      </span>
+      <span class="brand-name">dukaan<span>os</span></span>
+    </a>
+
+    <div class="nav-label">WORKSPACE</div>
+    <nav class="side-nav">
+      <button class="nav-item" type="button" routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }" ariaCurrentWhenActive="page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3.5 10 8.5-7 8.5 7v10.5h-6v-7h-5v7h-6z" /></svg>
+        <span>Home</span>
+      </button>
+      <button class="nav-item" type="button" routerLink="/sales" routerLinkActive="active" ariaCurrentWhenActive="page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v14H4zM8 9h8M8 12.5h8M8 16h4" /></svg>
+        <span>Sales</span>
+      </button>
+      <button class="nav-item" type="button" routerLink="/stock" routerLinkActive="active" ariaCurrentWhenActive="page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5h16v13H4zM8 7.5V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2.5M4 12h16M10 12v2h4v-2" /></svg>
+        <span>Stock</span>
+      </button>
+      <button class="nav-item" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3.2" /><path d="M3 20a6 6 0 0 1 12 0M16 5.2a3.2 3.2 0 0 1 0 6.2M17 14a5.3 5.3 0 0 1 4 5.1" /></svg>
+        <span>Customers</span>
+      </button>
+      <button class="nav-item" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5h16v13H4zM8 7.5V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2.5M8 12h8M8 15.5h5" /></svg>
+        <span>Suppliers</span>
+      </button>
+      <button class="nav-item" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M17 7.5c-.8-1.2-2.5-2-4.6-2-2.8 0-4.9 1.3-4.9 3.3s1.7 2.8 4.8 3.4 4.7 1.5 4.7 3.5-2.2 3.5-5.1 3.5c-2.3 0-4.2-.9-5-2.3" /></svg>
+        <span>Expenses</span>
+      </button>
+      <button class="nav-item" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19.5V12M10 19.5V5M16 19.5V9M22 19.5H2" /></svg>
+        <span>Reports</span>
+      </button>
+    </nav>
+
+    <div class="sidebar-bottom">
+      <button class="nav-item" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" /><path d="m19.4 15 .1.1 1.1.9-1.5 2.6-1.4-.6a7.7 7.7 0 0 1-1.5.9l-.2 1.5h-3l-.3-1.5a7.7 7.7 0 0 1-1.5-.9l-1.4.6-1.5-2.6 1.2-.9a7 7 0 0 1 0-1.8l-1.2-.9 1.5-2.6 1.4.6a7.7 7.7 0 0 1 1.5-.9l.3-1.5h3l.2 1.5a7.7 7.7 0 0 1 1.5.9l1.4-.6 1.5 2.6-1.1.9a7 7 0 0 1-.1 1.8Z" /></svg>
+        <span>Settings</span>
+      </button>
+      <div class="sidebar-shop">
+        <span class="shop-avatar">{{ businessName.slice(0, 2).toUpperCase() }}</span>
+        <span class="shop-details"><strong>{{ businessName }}</strong><small>Shop workspace</small></span>
+        <svg class="shop-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4" /></svg>
+      </div>
+    </div>
+  </aside>
+
+  <div class="main-column">
+    <header class="topbar">
+      <div class="mobile-brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none">
+            <path d="M7 13.5 9.2 7h13.6l2.2 6.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+            <path d="M6 13.5h20v12H6z" fill="currentColor" opacity=".16" />
+            <path d="M6 13.5h20v12H6zM11 25.5v-7h10v7" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" />
+            <path d="M11 13.5v2M16 13.5v2M21 13.5v2" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+          </svg>
+        </span>
+        <span class="brand-name">dukaan<span>os</span></span>
+      </div>
+      <div class="topbar-shop">
+        <strong>{{ businessName }}</strong>
+        <span class="topbar-dot" aria-hidden="true">·</span>
+        <span>{{ currentDate }}</span>
+      </div>
+      <div class="topbar-actions">
+        <button class="icon-button notification-button" type="button" aria-label="Notifications">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></svg>
+          <span class="notification-dot"></span>
+        </button>
+        <button class="icon-button" type="button" aria-label="Log out" title="Log out" (click)="auth.logout()">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17l5-5-5-5M15 12H3M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6" /></svg>
+        </button>
+        <button class="profile-button" type="button" [attr.aria-label]="'Profile: ' + userName">
+          <span class="profile-avatar">{{ userInitials }}</span>
+          <span class="profile-name">{{ userName }}</span>
+          <svg class="profile-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4" /></svg>
+        </button>
+      </div>
+    </header>
+
+    @if (isHome()) {
+    <main class="dashboard">
+      <section class="welcome-row">
+        <div>
+          <p class="eyebrow">{{ fullDate }}</p>
+          <h1>Good morning, {{ userName.split(' ')[0] }} <span aria-hidden="true">☀️</span></h1>
+          <p class="welcome-copy">Here’s what’s happening at your shop today.</p>
+        </div>
+        <button class="date-button" type="button" aria-label="Showing today's date">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="16" rx="2" /><path d="M7.5 3v4M16.5 3v4M3.5 9.5h17" /></svg>
+          <span>Today</span>
+          <svg class="date-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4" /></svg>
+        </button>
+      </section>
+
+      <section class="overview-grid" aria-label="Today's overview">
+        <article class="metric-card sales-metric">
+          <div class="metric-top">
+            <span class="metric-label">Today’s sales</span>
+            <span class="metric-icon green-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M4 5h2l2 11h10l2-8H7M10 20h.01M17 20h.01" /></svg>
+            </span>
+          </div>
+          <p class="metric-value">Rs 0</p>
+          <p class="metric-note"><span>No sales recorded yet</span></p>
+        </article>
+        <article class="metric-card">
+          <div class="metric-top">
+            <span class="metric-label">Cash received</span>
+            <span class="metric-icon blue-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2" /><circle cx="12" cy="12" r="3" /><path d="M6.5 8.5h.01M17.5 15.5h.01" /></svg>
+            </span>
+          </div>
+          <p class="metric-value">Rs 0</p>
+          <p class="metric-note"><span>No payments collected yet</span></p>
+        </article>
+        <article class="metric-card">
+          <div class="metric-top">
+            <span class="metric-label">Expenses</span>
+            <span class="metric-icon amber-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 3v18M17 7.5c-.8-1.2-2.5-2-4.6-2-2.8 0-4.9 1.3-4.9 3.3s1.7 2.8 4.8 3.4 4.7 1.5 4.7 3.5-2.2 3.5-5.1 3.5c-2.3 0-4.2-.9-5-2.3" /></svg>
+            </span>
+          </div>
+          <p class="metric-value">Rs 0</p>
+          <p class="metric-note"><span>No expenses recorded yet</span></p>
+        </article>
+        <article class="metric-card">
+          <div class="metric-top">
+            <span class="metric-label">Gross profit</span>
+            <span class="metric-icon purple-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="m4 16 5-5 4 3 7-8M14 6h6v6" /></svg>
+            </span>
+          </div>
+          <p class="metric-value">—</p>
+          <p class="metric-note"><span>Available after sales and costs are connected</span></p>
+        </article>
+      </section>
+
+      <section class="quick-actions-section" aria-labelledby="quick-actions-heading">
+        <div class="section-heading">
+          <div>
+            <h2 id="quick-actions-heading">Quick actions</h2>
+            <p>Get the everyday things done, faster.</p>
+          </div>
+        </div>
+        <div class="quick-actions-grid">
+          <button class="quick-action primary-action" type="button" routerLink="/sales/new">
+            <span class="action-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M4 5h2l2 11h10l2-8H7M10 20h.01M17 20h.01" /></svg>
+            </span>
+            <span class="action-copy"><strong>New sale</strong><small>Record a customer sale</small></span>
+            <svg class="action-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" /></svg>
+          </button>
+          <button class="quick-action" type="button" routerLink="/stock">
+            <span class="action-icon stock-action-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5" /></svg>
+            </span>
+            <span class="action-copy"><strong>Add stock</strong><small>Restock a product</small></span>
+            <svg class="action-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" /></svg>
+          </button>
+          <button class="quick-action" type="button">
+            <span class="action-icon expense-action-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 3v18M17 7.5c-.8-1.2-2.5-2-4.6-2-2.8 0-4.9 1.3-4.9 3.3s1.7 2.8 4.8 3.4 4.7 1.5 4.7 3.5-2.2 3.5-5.1 3.5c-2.3 0-4.2-.9-5-2.3" /></svg>
+            </span>
+            <span class="action-copy"><strong>Add expense</strong><small>Keep track of spending</small></span>
+            <svg class="action-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" /></svg>
+          </button>
+          <button class="quick-action" type="button">
+            <span class="action-icon payment-action-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M12 3v18M17 7.5c-.8-1.2-2.5-2-4.6-2-2.8 0-4.9 1.3-4.9 3.3s1.7 2.8 4.8 3.4 4.7 1.5 4.7 3.5-2.2 3.5-5.1 3.5c-2.3 0-4.2-.9-5-2.3" /></svg>
+            </span>
+            <span class="action-copy"><strong>Receive payment</strong><small>Collect money owed</small></span>
+            <svg class="action-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6" /></svg>
+          </button>
+        </div>
+      </section>
+
+      <div class="dashboard-lower-grid">
+        <section class="panel inventory-panel" aria-labelledby="inventory-heading">
+          <div class="panel-heading">
+            <div>
+              <h2 id="inventory-heading">Your inventory</h2>
+              <p>A quick look at what’s on your shelves.</p>
+            </div>
+            <button class="text-link" type="button" routerLink="/stock">View stock <span aria-hidden="true">→</span></button>
+          </div>
+          <div class="inventory-stats">
+            <div class="inventory-stat">
+              <span class="inventory-stat-icon total-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5" /></svg>
+              </span>
+              <span><strong>{{ inventorySummary().total }}</strong><small>Total products</small></span>
+            </div>
+            <div class="inventory-stat">
+              <span class="inventory-stat-icon low-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="M12 3 2.8 19h18.4L12 3Z" /><path d="M12 9v4m0 3h.01" /></svg>
+              </span>
+              <span><strong>{{ inventorySummary().low }}</strong><small>Low stock</small></span>
+            </div>
+            <div class="inventory-stat">
+              <span class="inventory-stat-icon out-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5ZM3 12l9 5 9-5M3 16l9 5 9-5" /></svg>
+              </span>
+              <span><strong>{{ inventorySummary().out }}</strong><small>Out of stock</small></span>
+            </div>
+          </div>
+          <div class="inventory-note">
+            <span class="note-sparkle" aria-hidden="true">✳</span>
+            <span>Product and stock activity will appear here when you add items.</span>
+          </div>
+        </section>
+
+        <section class="panel money-panel" aria-labelledby="money-heading">
+          <div class="panel-heading">
+            <div>
+              <h2 id="money-heading">Money to follow up</h2>
+              <p>Keep track of what’s coming in and going out.</p>
+            </div>
+            <button class="more-button" type="button" aria-label="More money summary options">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="19" cy="12" r="1" /></svg>
+            </button>
+          </div>
+          <div class="money-row receivable-row">
+            <span class="money-icon receivable-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M4 5.5h16v14H4zM8 9h8M8 12.5h5M16 16h.01" /></svg>
+            </span>
+            <span class="money-label"><strong>Customer receivables</strong><small>Money customers owe you</small></span>
+            <span class="money-amount"><strong>Rs 0</strong><small>0 customers</small></span>
+          </div>
+          <div class="money-row payable-row">
+            <span class="money-icon payable-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M4 5.5h16v14H4zM8 9h8M8 12.5h5M16 16h.01" /></svg>
+            </span>
+            <span class="money-label"><strong>Supplier payables</strong><small>Money you owe suppliers</small></span>
+            <span class="money-amount"><strong>Rs 0</strong><small>0 suppliers</small></span>
+          </div>
+        </section>
+      </div>
+
+      <section class="panel attention-panel" aria-labelledby="attention-heading">
+        <div class="panel-heading">
+          <div class="attention-title">
+            <span class="attention-bell" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></svg>
+            </span>
+            <div><h2 id="attention-heading">Needs your attention</h2><p>Shop alerts will appear here when there is activity.</p></div>
+          </div>
+          <span class="attention-count">0 items</span>
+        </div>
+        <div class="attention-list">
+          <article class="attention-item">
+            <span class="attention-item-icon stock-warning" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="m5 12 4 4L19 6" /></svg>
+            </span>
+            <div class="attention-copy">
+              <strong>Your shop is ready</strong>
+              <span>There are no alerts until you add real shop activity.</span>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <footer class="dashboard-footer">
+        <span><span class="footer-status"></span> Your shop is ready to get started</span>
+        <span>Made for your shop <span aria-hidden="true">♡</span></span>
+      </footer>
+    </main>
+  }
+  <router-outlet />
+  </div>
+
+  <nav class="mobile-bottom-nav" aria-label="Main navigation">
+    <button class="mobile-nav-item" type="button" routerLink="/" routerLinkActive="active" [routerLinkActiveOptions]="{ exact: true }" ariaCurrentWhenActive="page">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3.5 10 8.5-7 8.5 7v10.5h-6v-7h-5v7h-6z" /></svg><span>Home</span>
+    </button>
+    <button class="mobile-nav-item" type="button" routerLink="/sales" routerLinkActive="active" ariaCurrentWhenActive="page">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5h16v14H4zM8 9h8M8 12.5h8M8 16h4" /></svg><span>Sales</span>
+    </button>
+    <button class="mobile-nav-item" type="button" routerLink="/stock" routerLinkActive="active" ariaCurrentWhenActive="page">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7.5h16v13H4zM8 7.5V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2.5M4 12h16M10 12v2h4v-2" /></svg><span>Stock</span>
+    </button>
+    <button class="mobile-nav-item" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="7" r="1.5" /><circle cx="5" cy="12" r="1.5" /><circle cx="5" cy="17" r="1.5" /><path d="M10 7h10M10 12h10M10 17h10" /></svg><span>More</span>
+    </button>
+  </nav>
+</div>
+} @else {
+  <router-outlet />
+}

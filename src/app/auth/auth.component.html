@@ -1,0 +1,57 @@
+<main class="auth-page">
+  <section class="auth-card" aria-labelledby="auth-title">
+    <a class="auth-brand" routerLink="/" aria-label="DukaanOS">
+      <span class="auth-brand-mark" aria-hidden="true">D</span>
+      <span class="auth-brand-name">dukaan<span>os</span></span>
+    </a>
+    <p class="auth-eyebrow">YOUR SHOP, MADE SIMPLE</p>
+    <h1 id="auth-title">{{ isRegister ? 'Create your account' : 'Welcome back' }}</h1>
+    <p class="auth-intro">
+      {{ isRegister ? 'Set up your shop workspace to get started.' : 'Sign in to continue to your shop.' }}
+    </p>
+
+    @if (auth.error()) {
+      <p class="auth-error" role="alert">{{ auth.error() }}</p>
+    }
+    @if (errorMessage()) {
+      <p class="auth-error" role="alert">{{ errorMessage() }}</p>
+    }
+
+    <form (ngSubmit)="submit()" #authForm="ngForm">
+      @if (isRegister) {
+        <label>
+          <span>Your name</span>
+          <input name="name" type="text" autocomplete="name" required minlength="2" maxlength="120"
+            [ngModel]="name()" (ngModelChange)="name.set($event)" />
+        </label>
+        <label>
+          <span>Business name</span>
+          <input name="businessName" type="text" autocomplete="organization" required minlength="2" maxlength="160"
+            [ngModel]="businessName()" (ngModelChange)="businessName.set($event)" />
+        </label>
+      }
+      <label>
+        <span>Email address</span>
+        <input name="email" type="email" autocomplete="email" required maxlength="254"
+          [ngModel]="email()" (ngModelChange)="email.set($event)" />
+      </label>
+      <label>
+        <span>Password</span>
+        <input name="password" type="password" [attr.autocomplete]="isRegister ? 'new-password' : 'current-password'"
+          required [minlength]="isRegister ? 12 : 1" maxlength="128"
+          [ngModel]="password()" (ngModelChange)="password.set($event)" />
+        @if (isRegister) {
+          <small>Use at least 12 characters.</small>
+        }
+      </label>
+      <button class="auth-submit" type="submit" [disabled]="authForm.invalid || submitting()">
+        {{ submitting() ? 'Please wait…' : isRegister ? 'Create account' : 'Sign in' }}
+      </button>
+    </form>
+
+    <p class="auth-switch">
+      {{ isRegister ? 'Already have an account?' : 'New to DukaanOS?' }}
+      <a [routerLink]="isRegister ? '/login' : '/register'">{{ isRegister ? 'Sign in' : 'Create an account' }}</a>
+    </p>
+  </section>
+</main>

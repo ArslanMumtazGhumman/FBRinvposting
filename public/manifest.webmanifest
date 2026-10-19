@@ -1,0 +1,17 @@
+{
+  "name": "DukaanOS",
+  "short_name": "DukaanOS",
+  "description": "A simpler way to manage your shop.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8faf8",
+  "theme_color": "#367549",
+  "icons": [
+    {
+      "src": "dukaan-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

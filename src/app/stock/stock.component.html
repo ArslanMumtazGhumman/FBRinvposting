@@ -1,0 +1,280 @@
+<div class="stock-page">
+  <header class="stock-header">
+    <div>
+      <p class="eyebrow">Stock</p>
+      <h1>Inventory overview</h1>
+    </div>
+    <div class="stock-header-actions">
+      @if (totalProducts()) {
+        <button class="secondary-button" type="button" (click)="addStockFromHeader()">+ Add stock</button>
+      }
+      @if (canManageProducts()) {
+        <button class="primary-button" type="button" (click)="openProductForm()">+ Add product</button>
+      }
+    </div>
+  </header>
+
+  <section class="overview-grid" aria-label="Stock summary">
+    <article class="metric-card">
+      <div class="metric-top">
+        <span class="metric-label">Total products</span>
+        <span class="metric-icon green-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M4 7.5h16v13H4zM8 7.5V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2.5M4 12h16M10 12v2h4v-2" /></svg>
+        </span>
+      </div>
+      <p class="metric-value">{{ totalProducts() }}</p>
+      <p class="metric-note"><span>Across all categories</span></p>
+    </article>
+
+    <article class="metric-card">
+      <div class="metric-top">
+        <span class="metric-label">Low stock</span>
+        <span class="metric-icon amber-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M12 3 2.8 19h18.4L12 3Z" /><path d="M12 9v4m0 3h.01" /></svg>
+        </span>
+      </div>
+      <p class="metric-value">{{ lowStockCount() }}</p>
+      <p class="metric-note"><span>Need restock soon</span></p>
+    </article>
+
+    <article class="metric-card">
+      <div class="metric-top">
+        <span class="metric-label">Out of stock</span>
+        <span class="metric-icon red-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" /></svg>
+        </span>
+      </div>
+      <p class="metric-value">{{ outOfStockCount() }}</p>
+      <p class="metric-note"><span>Unavailable right now</span></p>
+    </article>
+
+    <article class="metric-card">
+      <div class="metric-top">
+        <span class="metric-label">Inventory value</span>
+        <span class="metric-icon purple-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24"><path d="M4 16 9 11l4 4 7-9" /><path d="M18 6h2v2" /></svg>
+        </span>
+      </div>
+      <p class="metric-value">{{ currency(inventoryValue()) }}</p>
+      <p class="metric-note"><span>Based on purchase cost</span></p>
+    </article>
+  </section>
+
+  <section class="stock-panel" aria-labelledby="stock-list-heading">
+    <div class="stock-panel-header">
+      <div>
+        <p class="eyebrow subtle">Products</p>
+        <h2 id="stock-list-heading">Current stock</h2>
+      </div>
+      <div class="stock-toolbar">
+        <label class="search-box" aria-label="Search stock">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6" /><path d="m16 16 5 5" /></svg>
+          <input type="search" [value]="query()" (input)="query.set($any($event.target).value)" placeholder="Search product" />
+        </label>
+        <div class="filter-pills" aria-label="Stock filters">
+          <button type="button" [class.active]="filter() === 'all'" (click)="setFilter('all')">All</button>
+          <button type="button" [class.active]="filter() === 'low'" (click)="setFilter('low')">Low stock</button>
+          <button type="button" [class.active]="filter() === 'out'" (click)="setFilter('out')">Out of stock</button>
+        </div>
+        <label class="category-filter">Category
+          <select [value]="categoryFilter()" (change)="setCategoryFilter($any($event.target).value)">
+            <option>All</option>
+            @for (category of service.categories(); track category.id) {
+              <option [value]="category.name">{{ category.name }}</option>
+            }
+          </select>
+        </label>
+      </div>
+    </div>
+
+    @if (errorMessage()) {
+      <p class="stock-message stock-error" role="alert">{{ errorMessage() }}</p>
+    }
+    @if (successMessage()) {
+      <p class="stock-message stock-success" role="status">{{ successMessage() }}</p>
+    }
+    @if (service.catalogError()) {
+      <p class="stock-message stock-error" role="alert">{{ service.catalogError() }}</p>
+    }
+    @if (showProductForm()) {
+      <form class="inventory-form" (ngSubmit)="saveProduct()" #productForm="ngForm">
+        <div class="inventory-form-heading">
+        <div><h3>{{ editingProductId() ? 'Edit product' : 'Add a product' }}</h3><p>Product and opening stock are saved to this shop.</p></div>
+          <button type="button" class="form-close" aria-label="Close add product form" (click)="showProductForm.set(false)">×</button>
+        </div>
+        <div class="inventory-form-grid">
+          <label>Product name
+            <input name="productName" required maxlength="160" [ngModel]="productName()" (ngModelChange)="productName.set($event)" />
+          </label>
+          <label>Category
+            <input name="categoryName" required maxlength="80" list="category-options" [ngModel]="categoryName()" (ngModelChange)="categoryName.set($event)" />
+            <datalist id="category-options">
+              @for (category of service.categories(); track category.id) {
+                <option [value]="category.name"></option>
+              }
+            </datalist>
+          </label>
+          <label>SKU <span class="field-optional">(optional)</span>
+            <input name="sku" maxlength="80" [ngModel]="sku()" (ngModelChange)="sku.set($event)" />
+          </label>
+          <label>Unit
+            <input name="unit" required maxlength="40" [ngModel]="unit()" (ngModelChange)="unit.set($event)" />
+          </label>
+          <label>Purchase price (Rs)
+            <input name="purchasePrice" type="number" required min="0" step="0.01" [ngModel]="purchasePrice()" (ngModelChange)="purchasePrice.set($event)" />
+          </label>
+          <label>Selling price (Rs)
+            <input name="salePrice" type="number" required min="0" step="0.01" [ngModel]="salePrice()" (ngModelChange)="salePrice.set($event)" />
+          </label>
+          <label>Opening stock
+            <input name="openingStock" type="number" required min="0" step="0.001" [disabled]="!!editingProductId()" [ngModel]="openingStock()" (ngModelChange)="openingStock.set($event)" />
+            @if (editingProductId()) {
+              <small>Use a stock movement to change the current quantity.</small>
+            }
+          </label>
+          <label>Low-stock threshold
+            <input name="lowStockThreshold" type="number" required min="0" step="1" [ngModel]="lowStockThreshold()" (ngModelChange)="lowStockThreshold.set($event)" />
+          </label>
+        </div>
+        @if (canManageProducts()) {
+        <div class="category-inline">
+          <label for="new-category-name">Add a reusable category</label>
+          <div>
+            <input id="new-category-name" name="categoryDraft" maxlength="80" [ngModel]="categoryDraft()" (ngModelChange)="categoryDraft.set($event)" placeholder="e.g. Cleaning supplies" />
+            <button class="secondary-button" type="button" [disabled]="!categoryDraft().trim()" (click)="saveCategory()">Add category</button>
+          </div>
+        </div>
+        }
+        <div class="inventory-form-actions">
+          <button class="secondary-button" type="button" (click)="showProductForm.set(false)">Cancel</button>
+          <button class="primary-button" type="submit" [disabled]="productForm.invalid || saving()">
+            {{ saving() ? 'Saving…' : editingProductId() ? 'Save changes' : 'Save product' }}
+          </button>
+        </div>
+      </form>
+    }
+    @if (showMovementForm()) {
+      <form class="inventory-form movement-form" (ngSubmit)="saveMovement()" #movementForm="ngForm">
+        <div class="inventory-form-heading">
+          <div><h3>Record stock movement</h3><p>{{ selectedProduct()?.name }}</p></div>
+          <button type="button" class="form-close" aria-label="Close stock movement form" (click)="showMovementForm.set(false)">×</button>
+        </div>
+        <div class="inventory-form-grid">
+          <label>Movement type
+            <select name="movementType" [ngModel]="movementType()" (ngModelChange)="setMovementType($event)">
+              <option value="PURCHASE">Stock in</option>
+              <option value="ADJUSTMENT_IN">Adjustment in</option>
+              <option value="ADJUSTMENT_OUT">Adjustment out</option>
+              <option value="DAMAGE">Damaged stock</option>
+              <option value="PURCHASE_RETURN">Return to supplier</option>
+            </select>
+          </label>
+          <label>Quantity
+            <input name="movementDelta" type="number" required min="0.001" step="0.001" [ngModel]="movementDelta()" (ngModelChange)="movementDelta.set($event)" />
+          </label>
+          <label class="form-wide">Note <span class="field-optional">(optional)</span>
+            <input name="movementNote" maxlength="500" [ngModel]="movementNote()" (ngModelChange)="movementNote.set($event)" />
+          </label>
+        </div>
+        <div class="inventory-form-actions">
+          <button class="secondary-button" type="button" (click)="showMovementForm.set(false)">Cancel</button>
+          <button class="primary-button" type="submit" [disabled]="movementForm.invalid || saving()">
+            {{ saving() ? 'Saving…' : 'Record movement' }}
+          </button>
+        </div>
+      </form>
+    }
+
+    <div class="stock-layout">
+      <div class="product-list" role="list">
+        @if (service.loadingProducts() && !totalProducts()) {
+          <div class="empty-state"><h3>Loading products…</h3></div>
+        } @else {
+        @for (product of filteredProducts(); track product.id) {
+          <article class="product-card" [class.active]="selectedProduct()?.id === product.id" (click)="selectProduct(product)" role="listitem">
+            <div class="product-copy">
+              <span class="product-category">{{ product.category }}</span>
+              <h3>{{ product.name }}</h3>
+              <div class="mini-details">
+                <span>
+                  <small>Sale price</small>
+                  <strong>{{ currency(product.salePrice) }}</strong>
+                </span>
+                <span>
+                  <small>Current stock</small>
+                  <strong>{{ product.stock }}</strong>
+                </span>
+              </div>
+            </div>
+            <div class="product-side">
+              <span class="stock-badge" [class.low]="stockTone(product) === 'low'" [class.out]="stockTone(product) === 'out'">
+                {{ stockTone(product) === 'out' ? 'Out of stock' : stockTone(product) === 'low' ? 'Low stock' : 'Healthy' }}
+              </span>
+              <div class="product-actions">
+                <button type="button" class="ghost-button" (click)="$event.stopPropagation(); addStock(product)">Add stock</button>
+                <button type="button" class="ghost-button" (click)="$event.stopPropagation(); selectedProductId.set(product.id); showMovementForm.set(true); setMovementType('ADJUSTMENT_OUT')">Adjust</button>
+                <button type="button" class="ghost-button" (click)="$event.stopPropagation(); openSale()">Sell</button>
+              </div>
+            </div>
+          </article>
+        } @empty {
+          <div class="empty-state">
+            <h3>{{ totalProducts() ? 'No products matched' : 'No products yet' }}</h3>
+            <p>Products added to your shop will appear here.</p>
+          </div>
+        }
+        }
+      </div>
+
+      <aside class="detail-panel" aria-live="polite">
+        @if (selectedProduct(); as product) {
+          <div class="detail-header">
+            <div>
+              <span class="detail-kicker">Product detail</span>
+              <h3>{{ product.name }}</h3>
+            </div>
+            <span class="stock-badge" [class.low]="stockTone(product) === 'low'" [class.out]="stockTone(product) === 'out'">
+              {{ stockTone(product) === 'out' ? 'Out of stock' : stockTone(product) === 'low' ? 'Low stock' : 'Healthy' }}
+            </span>
+          </div>
+
+          <div class="detail-grid">
+            <div class="detail-row"><span>Current stock</span><strong>{{ product.stock }}</strong></div>
+            <div class="detail-row"><span>Purchase price</span><strong>{{ currency(product.purchasePrice) }}</strong></div>
+            <div class="detail-row"><span>Sale price</span><strong>{{ currency(product.salePrice) }}</strong></div>
+            <div class="detail-row"><span>Sold today</span><strong>{{ product.soldToday }}</strong></div>
+            <div class="detail-row"><span>Sold this month</span><strong>{{ product.soldThisMonth }}</strong></div>
+          </div>
+
+          <div class="detail-actions">
+            <button type="button" class="primary-button small" (click)="addStock(product)">Add stock</button>
+            <button type="button" class="secondary-button" (click)="showMovementForm.set(true); setMovementType('ADJUSTMENT_OUT')">Adjust</button>
+            <button type="button" class="secondary-button" (click)="openSale()">Sell</button>
+            @if (canManageProducts()) {
+              <button type="button" class="secondary-button" (click)="editProduct(product)">Edit</button>
+              <button type="button" class="archive-button" (click)="archiveProduct(product)">Archive</button>
+            }
+          </div>
+          <section class="movement-history" aria-label="Stock movement history">
+            <h4>Recent stock movements</h4>
+            @if (movementHistory().length) {
+              @for (movement of movementHistory().slice(0, 5); track movement.id) {
+                <div class="movement-row">
+                  <span><strong>{{ movementDescription(movement) }}</strong><small>{{ movement.createdAt | date:'medium' }} · {{ movement.resultingStock }} after</small></span>
+                  <strong [class.movement-negative]="movement.delta < 0">{{ movement.delta > 0 ? '+' : '' }}{{ movement.delta }}</strong>
+                </div>
+              }
+            } @else {
+              <p>No stock movements recorded.</p>
+            }
+          </section>
+        } @else {
+          <div class="empty-state">
+            <h3>{{ totalProducts() ? 'No product matched' : 'No products yet' }}</h3>
+            <p>{{ totalProducts() ? 'Try a different search term or switch filters.' : 'Products added to your shop will appear here.' }}</p>
+          </div>
+        }
+      </aside>
+    </div>
+  </section>
+</div>
