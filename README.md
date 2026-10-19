@@ -117,6 +117,7 @@ copy. `source: "none"` means there's no PRAL copy yet, and the web app falls bac
 | `GET /rates?saleType&date&province` | PRAL rates per Rasid sale type (or just `saleType`); province defaults to the business's, `date` to today in Pakistan |
 | `GET /hs?q=sugar&limit=20` | HS search: code prefix (`1701`, `1701.99`, `170199`) or words as prefixes of code and description (`tsvector`) |
 | `GET /uom-for-hs?hs=1701.9910` | Units FBR accepts for an HS code (`HS_UOM`, sales annexure) |
+| `GET /hs-check?codes=1701.9910,2716.0000` | Up to 100 codes: `{ known, description, uoms }` each (bulk import) |
 | `GET /sro?rateId&date&province`, `GET /sro-items?sroId&date` | SRO schedules for a PRAL rate, items of a schedule |
 | `GET /:kind` | `provinces`, `doctypecode`, `uom`, `transtypecode`, `sroitemcode` as PRAL lists them → `{ items }` |
 | `GET /status` | Cache freshness per list, which token lookups use (`platform`, `production`, `sandbox` or none; never the token), and `saleTypesNeedingReview` |

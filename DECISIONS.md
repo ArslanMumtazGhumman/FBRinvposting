@@ -374,3 +374,32 @@ confirm every row that still has `needs_review`. These rows are uncertain on the
    unless the invoice sets `scenarioId`. Confirm whether PRAL's sandbox needs SN002/SN026 there. This affects
    sandbox only; production sends no scenario.
 
+### Step 3: frontend
+- **One more read-only route, `GET …/reference/hs-check?codes=a,b,…`** (up to 100). It says which codes FBR's HS list
+  has and which units each allows. Bulk import needs this for a whole sheet. One search plus one `uom-for-hs` per
+  code would be hundreds of requests. Unit lookups behind it go through the same 12 h cache, 6 at a time.
+- **ReferenceService caches every PRAL answer for 24 h**, in memory and in IndexedDB (`ReferenceCache`,
+  database `rasid-reference`). The key is the path and query, without the business, because the data is the same
+  for every business. `source: "none"` answers and failed requests aren't kept, so they're tried again. Where
+  IndexedDB isn't available (private windows, tests) the cache is memory only. Offline mode never calls the API
+  and keeps the bundled lists.
+- **Rates are per invoice date now:** `rates(saleType, date)` loads that date's PRAL rates for the seller's province
+  the first time it's read. The editor's rate dropdown and the 0046 check use the invoice's date, not today.
+- **The HS type-ahead** (`shared/hs-typeahead.component.ts`) is a combobox on a CDK connected overlay. It searches
+  200 ms after the last keystroke and lists "code · description". ↑/↓ move, Enter picks, Esc closes, and the ARIA
+  combobox attributes are set. A complete code (0000.0000) doesn't search. The invoice editor's HS cell and the
+  products page both use it. The CDK overlay CSS is imported in `styles.scss`.
+- **Units follow the HS code.** A complete code is checked with `hs-check`. When FBR allows one unit, the line
+  switches to it. When it allows several, the unit list narrows to them and a wrong unit is flagged (0099), not
+  silently changed. The products page picks the first allowed unit, because a product has no validation step.
+- **SRO fields become dropdowns** when PRAL has schedules for the line's rate on the invoice date. They load whenever
+  the sale type, rate or date changes, and the extra fields open by themselves. Without schedules the fields stay free
+  text, as before. A value already on the line stays in the list.
+- **validateInvoice takes `ReferenceChecks`** (`ReferenceService.checks()`): HS→UOM, `hsKnown` and `liveRates`.
+  This adds 0052 (HS code not in FBR's list) and 0046 (rate not in PRAL's list for that sale type and date). Each check
+  is skipped when there's no PRAL data, so the offline demo and sale types still needing review behave as before.
+  `checks()` only reads, so PostingService still never triggers requests.
+- **Bulk import review** runs the cache checks as soon as the sheet is mapped: one `hs-check` call per 100 distinct
+  codes and the rates for each distinct invoice date. The errors appear on the same cells as before. "Validate with
+  FBR" waits for these checks, so FBR only sees invoices that pass them.
+

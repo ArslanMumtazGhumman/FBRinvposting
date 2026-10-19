@@ -15,7 +15,7 @@ import { todayPk } from '../reference/pral.js';
 import { saleTypesNeedingReview } from '../reference/sale-types.js';
 import { cacheStatus } from '../reference/store.js';
 import { hasReferenceToken, referenceTokenSource } from '../reference/token.js';
-import { HsSearchQuery, ListKind, RatesQuery, SroItemsQuery, SroQuery, UomForHsQuery } from '../schemas/reference.js';
+import { HsCheckQuery, HsSearchQuery, ListKind, RatesQuery, SroItemsQuery, SroQuery, UomForHsQuery } from '../schemas/reference.js';
 
 export const referenceRoutes = Router({ mergeParams: true });
 referenceRoutes.use(requireAuth, requireBusiness);
@@ -43,6 +43,11 @@ referenceRoutes.get('/hs', async (req, res) => {
 referenceRoutes.get('/uom-for-hs', async (req, res) => {
   const q = parse(UomForHsQuery, req.query, res); if (!q) return;
   send(res, await ref.hsUoms(q.hs));
+});
+
+referenceRoutes.get('/hs-check', async (req, res) => {
+  const q = parse(HsCheckQuery, req.query, res); if (!q) return;
+  send(res, await ref.hsCheck(q.codes));
 });
 
 referenceRoutes.get('/sro', async (req, res) => {

@@ -14,7 +14,7 @@ import {
   type Province, type RefRequest,
 } from './pral.js';
 import { mappedSaleTypes, mapSaleTypes, saleTypesUnchecked } from './sale-types.js';
-import { hsCodeCount, readList, readNearest, searchHsCodes, writeList, type CachedList } from './store.js';
+import { findHsCodes, hsCodeCount, readList, readNearest, searchHsCodes, writeList, type CachedList } from './store.js';
 import { referenceToken, rejectReferenceToken } from './token.js';
 
 const LOOKUP_TIMEOUT_MS = 5000;
@@ -120,6 +120,24 @@ export async function hsSearch(q: string, limit: number) {
 export async function hsUoms(hsCode: string) {
   const hit = await lookup(requests.hsUom(hsCode));
   return { ...meta(hit), uoms: hit ? toUoms(hit.data).map(u => u.description) : [] };
+}
+
+/**
+ * For bulk import: which of `codes` FBR's HS list has, and the units each known
+ * code allows (null when PRAL has no rule or couldn't be reached). One call per
+ * sheet chunk instead of one search and one HS_UOM request per code.
+ */
+export async function hsCheck(codes: string[]) {
+  if (!(await hsCodeCount())) return { source: 'none' as const, codes: {} };
+  const known = new Map((await findHsCodes(codes)).map(h => [h.code, h.description]));
+  const out: Record<string, { known: boolean; description?: string; uoms: string[] | null }> = {};
+  await mapLimit(codes, 6, async code => {
+    const description = known.get(code);
+    if (description === undefined) { out[code] = { known: false, uoms: null }; return; }
+    const u = await hsUoms(code);
+    out[code] = { known: true, description, uoms: u.source === 'pral' && u.uoms.length ? u.uoms : null };
+  });
+  return { source: 'pral' as const, codes: out };
 }
 
 export async function sroSchedules(rateId: number, provinceName: string, date: string) {

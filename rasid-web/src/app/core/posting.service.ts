@@ -103,7 +103,7 @@ export class PostingService {
   /** Local + FBR validation without posting. Saves the result. */
   async validate(inv: Invoice): Promise<Invoice> {
     const biz = this.store.business()!;
-    const local = validateInvoice(inv, biz, hs => this.ref.allowedUoms(hs));
+    const local = validateInvoice(inv, biz, this.ref.checks());
     if (local.length) return this.store.upsertInvoice({ ...inv, issues: local, status: 'draft' });
     const res = await this.fbr.validate({ businessId: biz.id, environment: biz.environment, payload: toPayload(inv, biz), idempotencyKey: inv.localRef });
     const issues = issuesFromResponse(res);
@@ -142,7 +142,7 @@ export class PostingService {
   private async postViaQueue(inv: Invoice, confirmNotInIris: boolean): Promise<Outcome> {
     const biz = this.store.business()!;
     if (inv.status === 'posted') return { ok: true, invoice: inv };
-    const local = validateInvoice(inv, biz, hs => this.ref.allowedUoms(hs));
+    const local = validateInvoice(inv, biz, this.ref.checks());
     try {
       if (local.length) {
         return { ok: false, invoice: await this.store.upsertInvoice({ ...inv, issues: local, status: 'draft' }), reason: 'invalid' };
@@ -237,7 +237,7 @@ export class PostingService {
   private async postLocally(inv: Invoice, onRetry?: () => void): Promise<Outcome> {
     const biz = this.store.business()!;
     if (inv.status === 'posted') return { ok: true, invoice: inv };
-    const local = validateInvoice(inv, biz, hs => this.ref.allowedUoms(hs));
+    const local = validateInvoice(inv, biz, this.ref.checks());
     if (local.length) {
       this.store.patchInvoice(inv.id, { issues: local, status: 'failed' });
       return { ok: false, invoice: this.store.invoiceById(inv.id)!, reason: 'invalid' };

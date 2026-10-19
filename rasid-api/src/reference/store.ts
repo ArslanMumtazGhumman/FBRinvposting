@@ -3,7 +3,7 @@
  * same data for every tenant and have no RLS, so they're read and written
  * outside withBusiness().
  */
-import { and, asc, count, desc, eq, lt, lte, max, ne, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, lt, lte, max, ne, sql } from 'drizzle-orm';
 import { db, type Executor } from '../db/client.js';
 import { hsCodes, refLists, type ReferenceSource } from '../db/schema.js';
 import type { HsCode, RefRequest } from './pral.js';
@@ -73,6 +73,12 @@ export async function replaceHsCodes(list: HsCode[], sourceEnv: ReferenceSource)
 export async function hsCodeCount() {
   const [row] = await db.select({ n: count() }).from(hsCodes);
   return row?.n ?? 0;
+}
+
+/** The given codes that FBR's list has, with their descriptions. */
+export async function findHsCodes(codes: string[]): Promise<HsCode[]> {
+  if (!codes.length) return [];
+  return db.select({ code: hsCodes.code, description: hsCodes.description }).from(hsCodes).where(inArray(hsCodes.code, codes));
 }
 
 /**

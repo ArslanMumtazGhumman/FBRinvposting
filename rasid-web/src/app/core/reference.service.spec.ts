@@ -4,15 +4,26 @@ import { TestBed } from '@angular/core/testing';
 import { provideRouter } from '@angular/router';
 import { next, signedIn } from '../../testing/api-fixtures';
 import { ApiStoreService } from './api-store.service';
+import { CacheEntry, REFERENCE_CACHE_BACKEND, ReferenceCache, ReferenceCacheBackend } from './reference-cache';
 import { ReferenceService } from './reference.service';
 import { Store } from './store';
 import { StoreService } from './store.service';
+import { validateInvoice } from './tax';
 import { todayIso } from './util';
+import { invoice } from '../../testing/api-fixtures';
 
-function setup(store: typeof ApiStoreService | typeof StoreService) {
+/** IndexedDB stand-in that outlives one TestBed, like the browser's does across page loads. */
+class MemoryBackend implements ReferenceCacheBackend {
+  readonly entries = new Map<string, CacheEntry>();
+  async get(key: string) { return this.entries.get(key); }
+  async set(key: string, entry: CacheEntry) { this.entries.set(key, entry); }
+}
+
+function setup(store: typeof ApiStoreService | typeof StoreService, backend: ReferenceCacheBackend | null = null) {
   localStorage.clear();
   TestBed.configureTestingModule({
-    providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([{ path: 'login', children: [] }]), { provide: Store, useClass: store }],
+    providers: [provideHttpClient(), provideHttpClientTesting(), provideRouter([{ path: 'login', children: [] }]), { provide: Store, useClass: store },
+      { provide: REFERENCE_CACHE_BACKEND, useValue: backend }],
   });
   return { store: TestBed.inject(Store), ref: TestBed.inject(ReferenceService), http: TestBed.inject(HttpTestingController) };
 }
@@ -67,8 +78,38 @@ describe('ReferenceService with the API', () => {
     store.businesses.update(bs => bs.map(b => ({ ...b, province: 'Sindh' })));
     ref.rates('Goods at Reduced Rate');
     (await next(http, `/api/businesses/b1/reference/rates?province=Sindh&date=${todayIso()}`)).flush({ ...RATES, saleTypes: [{ ...RATES.saleTypes[0], rates: [{ id: 300, desc: '12%', value: 12 }] }] });
-    (await next(http, '/api/businesses/b1/reference/uom')).flush({ source: 'pral', items: [{ id: 13, description: 'KG' }] });
     await vi.waitFor(() => expect(ref.rates('Goods at Reduced Rate')).toEqual(['12%']));
+    expect(ref.uoms()).toEqual(['KG', 'KWH']); // the unit list is the same everywhere: not asked again
+  });
+
+  it('rates follow the invoice date: another date is loaded on first read', async () => {
+    await loaded();
+    expect(ref.rates('Goods at Reduced Rate', '2026-09-01')).toEqual(['1%', '5%', '10%', '12%', '15%', '16%']); // bundled until loaded
+    (await next(http, '/api/businesses/b1/reference/rates?province=Punjab&date=2026-09-01')).flush({ ...RATES, saleTypes: [{ ...RATES.saleTypes[0], rates: [{ id: 270, desc: '7%', value: 7 }] }] });
+    await vi.waitFor(() => expect(ref.rates('Goods at Reduced Rate', '2026-09-01')).toEqual(['7%']));
+    expect(ref.rates('Goods at Reduced Rate')).toEqual(['5%', '10%']); // today's are separate
+    expect(ref.rateInfo('Goods at Reduced Rate', '7%', '2026-09-01')).toEqual({ id: 270, desc: '7%', value: 7 });
+  });
+
+  it('checkHs asks once per 100 codes; validateInvoice then flags unknown codes (0052), wrong units (0099) and rates PRAL does not allow (0046)', async () => {
+    await loaded();
+    const done = ref.checkHs(['1701.9910', '0000.0001', '1701.9910', 'not a code']);
+    (await next(http, '/api/businesses/b1/reference/hs-check?codes=1701.9910,0000.0001')).flush({
+      source: 'pral', codes: { '1701.9910': { known: true, description: 'Sugar', uoms: ['KG', 'Ton'] }, '0000.0001': { known: false, uoms: null } },
+    });
+    await done;
+    expect([ref.hsKnown('1701.9910'), ref.hsKnown('0000.0001'), ref.hsKnown('2716.0000')]).toEqual([true, false, undefined]);
+    expect(ref.allowedUoms('1701.9910')).toEqual(['KG', 'Ton']);
+    await ref.checkHs(['1701.9910']); // already checked: no request
+
+    const base = invoice('x', { invoiceDate: todayIso() });
+    const line = { ...base.items[0]!, saleType: 'Goods at Reduced Rate', rate: '5%', hsCode: '1701.9910', uoM: 'KG', valueSalesExcludingST: 1000, salesTaxApplicable: 50 };
+    const codes = (over: object) => validateInvoice({ ...base, items: [{ ...line, ...over }] }, store.business()!, ref.checks()).map(i => i.code);
+    expect(codes({})).toEqual([]);
+    expect(codes({ hsCode: '0000.0001' })).toContain('0052');
+    expect(codes({ uoM: 'Liter' })).toContain('0099');
+    expect(codes({ rate: '12%', salesTaxApplicable: 120 })).toContain('0046');
+    expect(codes({ saleType: 'Goods at standard rate (default)', rate: '17%', salesTaxApplicable: 170 })).not.toContain('0046'); // no PRAL list: not checked
   });
 
   it('HS search uses the API, and the bundled sample when the API has no copy or fails', async () => {
@@ -116,12 +157,13 @@ describe('ReferenceService with the API', () => {
 
   it('SRO schedules need a PRAL rate id; items are looked up by schedule', async () => {
     await loaded();
-    expect(await ref.sroSchedules('Goods at standard rate (default)', '18%', '2026-10-18')).toEqual([]); // bundled rate: no id
-    const sched = ref.sroSchedules('Goods at Reduced Rate', '5%', '2026-10-18');
-    (await next(http, '/api/businesses/b1/reference/sro?rateId=280&province=Punjab&date=2026-10-18')).flush({ source: 'pral', schedules: [{ id: 389, serNo: 1, desc: 'EIGHTH SCHEDULE Table 1' }] });
+    const today = todayIso();
+    expect(await ref.sroSchedules('Goods at standard rate (default)', '18%', today)).toEqual([]); // bundled rate: no id
+    const sched = ref.sroSchedules('Goods at Reduced Rate', '5%', today);
+    (await next(http, `/api/businesses/b1/reference/sro?rateId=280&province=Punjab&date=${today}`)).flush({ source: 'pral', schedules: [{ id: 389, serNo: 1, desc: 'EIGHTH SCHEDULE Table 1' }] });
     expect(await sched).toEqual([{ id: 389, desc: 'EIGHTH SCHEDULE Table 1' }]);
-    const items = ref.sroItems(389, '2026-10-18');
-    (await next(http, '/api/businesses/b1/reference/sro-items?sroId=389&date=2026-10-18')).flush({ source: 'pral', items: [{ id: 17853, desc: '50' }] });
+    const items = ref.sroItems(389, today);
+    (await next(http, `/api/businesses/b1/reference/sro-items?sroId=389&date=${today}`)).flush({ source: 'pral', items: [{ id: 17853, desc: '50' }] });
     expect(await items).toEqual([{ id: 17853, desc: '50' }]);
   });
 });
@@ -137,5 +179,38 @@ describe('ReferenceService offline', () => {
     expect(await ref.hsUoms('1701.9910')).toBeNull();
     expect(await ref.sroSchedules('Goods at Reduced Rate', '5%', '2026-10-18')).toEqual([]);
     http.verify();
+  });
+});
+
+describe('ReferenceCache (memory + IndexedDB, 24 h)', () => {
+  afterEach(() => TestBed.inject(HttpTestingController).verify());
+
+  it('a PRAL answer is reused for 24 hours, also after a reload; source "none" and failures are not kept', async () => {
+    const backend = new MemoryBackend();
+    let { store, ref, http } = setup(ApiStoreService, backend);
+    await signedIn(http, store);
+    const first = ref.searchHs('sugar');
+    (await next(http, '/api/businesses/b1/reference/hs?q=sugar&limit=20')).flush({ source: 'pral', results: [{ code: '1701.9910', description: 'Sugar' }] });
+    expect(await first).toEqual([{ code: '1701.9910', desc: 'Sugar' }]);
+    expect([...backend.entries.keys()]).toEqual(['/hs?q=sugar&limit=20']);
+    const none = ref.searchHs('rice');
+    (await next(http, '/api/businesses/b1/reference/hs?q=rice&limit=20')).flush({ source: 'none', results: [] });
+    await none;
+    expect(backend.entries.has('/hs?q=rice&limit=20')).toBe(false);
+
+    // A new page load: memory is empty, IndexedDB still has the answer.
+    TestBed.resetTestingModule();
+    ({ store, ref, http } = setup(ApiStoreService, backend));
+    await signedIn(http, store);
+    expect(await ref.searchHs('sugar')).toEqual([{ code: '1701.9910', desc: 'Sugar' }]); // no request
+
+    // A day later it's fetched again.
+    TestBed.resetTestingModule();
+    ({ store, ref, http } = setup(ApiStoreService, backend));
+    TestBed.inject(ReferenceCache).now = () => Date.now() + 24 * 3600_000 + 1;
+    await signedIn(http, store);
+    const again = ref.searchHs('sugar');
+    (await next(http, '/api/businesses/b1/reference/hs?q=sugar&limit=20')).flush({ source: 'pral', results: [] });
+    expect(await again).toEqual([]);
   });
 });

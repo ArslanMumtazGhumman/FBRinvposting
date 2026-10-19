@@ -16,5 +16,11 @@ export const HsSearchQuery = z.object({
 
 export const UomForHsQuery = z.object({ hs: HsCode });
 
+/** Comma-separated HS codes, 1 to 100, duplicates removed. */
+export const HsCheckQuery = z.object({
+  codes: z.string().max(1100).transform(s => [...new Set(s.split(',').map(c => c.trim()).filter(Boolean))])
+    .pipe(z.array(HsCode).min(1, 'Give at least one HS code').max(100, 'At most 100 HS codes per request')),
+});
+
 export const SroQuery = z.object({ rateId: z.coerce.number().int().positive(), province: Province.optional(), date: IsoDate.optional() });
 export const SroItemsQuery = z.object({ sroId: z.coerce.number().int().positive(), date: IsoDate.optional() });

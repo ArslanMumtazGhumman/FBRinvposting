@@ -180,6 +180,7 @@ describe('1. FBR tokens never leave the server', () => {
       ['GET /api/businesses/:businessId/reference/:kind', () => a.get(`${base}/reference/uom`)],
       ['GET /api/businesses/:businessId/reference/rates', () => a.get(`${base}/reference/rates`)],
       ['GET /api/businesses/:businessId/reference/hs', () => a.get(`${base}/reference/hs?q=sugar`)],
+      ['GET /api/businesses/:businessId/reference/hs-check', () => a.get(`${base}/reference/hs-check?codes=1701.9910`)],
       ['GET /api/businesses/:businessId/reference/uom-for-hs', () => a.get(`${base}/reference/uom-for-hs?hs=1701.9910`)],
       ['GET /api/businesses/:businessId/reference/sro', () => a.get(`${base}/reference/sro?rateId=280`)],
       ['GET /api/businesses/:businessId/reference/sro-items', () => a.get(`${base}/reference/sro-items?sroId=389`)],

@@ -73,11 +73,28 @@ export type HsUomLookup = (hsCode: string) => readonly string[] | undefined;
 const bundledHsUom: HsUomLookup = hs => (HS_UOM_RULES[hs] ? [HS_UOM_RULES[hs]] : undefined);
 
 /**
+ * PRAL reference data the checks can use (ReferenceService.checks() in the app).
+ * Each answers undefined when it has no data, and that check is skipped.
+ */
+export interface ReferenceChecks {
+  /** UOMs FBR accepts for an HS code (HS_UOM). */
+  allowedUoms?: HsUomLookup;
+  /** Whether FBR's HS code list has the code. */
+  hsKnown?: (hsCode: string) => boolean | undefined;
+  /** PRAL's rates for a sale type in the seller's province on the invoice date. */
+  liveRates?: (saleType: string, date: string) => readonly string[] | undefined;
+  /** PRAL's numeric percentage for a rate, when PRAL gave one. */
+  rateValue?: (saleType: string, rate: string, date: string) => number | undefined;
+}
+
+/**
  * Client-side pre-validation mirroring FBR rules, so most rejections are
  * caught before a network call. FBR validate is still the final check.
- * `allowedUoms` is ReferenceService.allowedUoms (PRAL's HS_UOM) in the app.
+ * Pass ReferenceService.checks() (or just an HS→UOM lookup) for the PRAL checks.
  */
-export function validateInvoice(inv: Invoice, seller: Business, allowedUoms: HsUomLookup = bundledHsUom): FieldIssue[] {
+export function validateInvoice(inv: Invoice, seller: Business, ref: ReferenceChecks | HsUomLookup = { allowedUoms: bundledHsUom }): FieldIssue[] {
+  const checks: ReferenceChecks = typeof ref === 'function' ? { allowedUoms: ref } : ref;
+  const allowedUoms = checks.allowedUoms ?? bundledHsUom;
   const out: FieldIssue[] = [];
   const add = (code: string, message: string, field?: FieldIssue['field'], itemIndex?: number) =>
     out.push({ code, message, field, itemIndex, hint: FBR_ERROR_HELP[code], source: 'local' });
@@ -102,7 +119,14 @@ export function validateInvoice(inv: Invoice, seller: Business, allowedUoms: HsU
     if (!def) add('0013', 'Provide valid sale type', 'saleType', i);
     if (!/^\d{4}\.\d{4}$/.test(it.hsCode?.trim() ?? '')) add('0019', 'Provide HS code in 0000.0000 format', 'hsCode', i);
     if (!it.productDescription?.trim()) add('L-002', 'Add a product description', 'productDescription', i);
+    if (/^\d{4}\.\d{4}$/.test(it.hsCode?.trim() ?? '') && checks.hsKnown?.(it.hsCode.trim()) === false) {
+      add('0052', `HS code ${it.hsCode.trim()} is not in FBR's HS code list`, 'hsCode', i);
+    }
     if (!it.rate) add('0046', 'Provide rate', 'rate', i);
+    const allowedRates = it.rate && def ? checks.liveRates?.(it.saleType, inv.invoiceDate) : undefined;
+    if (allowedRates?.length && !allowedRates.includes(it.rate)) {
+      add('0046', `Rate ${it.rate} is not allowed for this sale type on ${inv.invoiceDate}. FBR allows: ${allowedRates.join(', ')}`, 'rate', i);
+    }
     if (!it.uoM) add('0099', 'Provide UOM', 'uoM', i);
     const uoms = it.uoM ? allowedUoms(it.hsCode) : undefined;
     if (uoms?.length && !uoms.includes(it.uoM)) {

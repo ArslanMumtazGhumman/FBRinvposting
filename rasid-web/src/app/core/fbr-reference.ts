@@ -180,7 +180,7 @@ export const FBR_ERROR_HELP: Record<string, string> = {
   '0019': 'Add the HS code for this item.',
   '0026': 'Debit notes need the FBR number of the original invoice.',
   '0046': 'Pick a rate allowed for this sale type.',
-  '0052': 'This HS code does not fit the selected sale type.',
+  '0052': 'Use an HS code from FBR’s list that fits the selected sale type.',
   '0058': 'Buyer and seller cannot be the same registration number.',
   '0077': 'This sale type needs an SRO / schedule number.',
   '0078': 'This sale type needs the SRO item serial number.',

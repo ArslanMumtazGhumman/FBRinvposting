@@ -126,7 +126,7 @@ const MAX_ROWS = 50000;
             <button class="btn btn-sm" (click)="recalcAll()" title="Recompute sales and further tax from each line's rate"><app-icon name="wand" /> Recalculate tax</button>
           </div>
           <div class="row">
-            <button class="btn btn-sm" (click)="validateAll()" [disabled]="validating()"><app-icon name="check" /> {{ validating() ? 'Validating ' + validated() + '/' + readyCount() : 'Validate with FBR' }}</button>
+            <button class="btn btn-sm" (click)="validateAll()" [disabled]="validating() || refChecking()"><app-icon name="check" /> {{ refChecking() ? 'Checking HS codes and rates…' : validating() ? 'Validating ' + validated() + '/' + readyCount() : 'Validate with FBR' }}</button>
           </div>
         </div>
 
@@ -409,12 +409,30 @@ export class BulkImportComponent implements OnDestroy {
     this.invoices.set(invoices);
     this.fbrIssues.set(new Map());
     this.step.set(3);
+    this.refCheck = this.runRefChecks(invoices);
+  }
+
+  /**
+   * Checks the sheet against Rasid's PRAL cache before anything goes to FBR:
+   * HS codes (0052) and their units (0096/0099) in one hs-check call per 100
+   * codes, and rates per sale type for each invoice date (0046). localIssues
+   * picks the results up as they arrive. Offline there's nothing to check.
+   */
+  protected refChecking = signal(false);
+  private refCheck: Promise<void> = Promise.resolve();
+  private async runRefChecks(invoices: Invoice[]) {
+    if (this.store.mode !== 'api') return;
+    this.refChecking.set(true);
+    try {
+      const dates = [...new Set(invoices.map(v => v.invoiceDate))].filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d));
+      await Promise.all([this.ref.checkHs(invoices.flatMap(v => v.items.map(l => l.hsCode))), ...dates.map(d => this.ref.loadRates(d))]);
+    } finally { this.refChecking.set(false); }
   }
 
   /* ------------------------------ step 3 ------------------------------ */
   protected localIssues = computed(() => {
     const biz = this.store.business()!;
-    return this.invoices().map(inv => validateInvoice(inv, biz, hs => this.ref.allowedUoms(hs)));
+    return this.invoices().map(inv => validateInvoice(inv, biz, this.ref.checks()));
   });
   private issuesFor = (i: number) => [...(this.fbrIssues().get(i) ?? []), ...this.localIssues()[i]];
   protected readyCount = computed(() => this.localIssues().filter((l, i) => !l.length && !(this.fbrIssues().get(i)?.length)).length);
@@ -440,7 +458,10 @@ export class BulkImportComponent implements OnDestroy {
     this.invoices.update(list => { const c = list.slice(); c[inv] = fn(c[inv]); return c; });
     this.fbrIssues.update(m => { const n = new Map(m); n.delete(inv); return n; });
   }
-  editInv(inv: number, k: 'invoiceDate', val: string) { this.mutate(inv, v => ({ ...v, [k]: val.trim() })); }
+  editInv(inv: number, k: 'invoiceDate', val: string) {
+    this.mutate(inv, v => ({ ...v, [k]: val.trim() }));
+    void this.ref.loadRates(val.trim());
+  }
   editBuyer(inv: number, k: 'name' | 'ntnCnic', val: string) {
     const rate = this.store.business()!.furtherTaxRate;
     this.mutate(inv, v => {
@@ -460,6 +481,7 @@ export class BulkImportComponent implements OnDestroy {
       items[r.line] = l;
       return { ...v, items };
     });
+    if (k === 'hsCode') void this.ref.checkHs([String(val)]);
   }
   recalcAll() {
     const rate = this.store.business()!.furtherTaxRate;
@@ -469,6 +491,7 @@ export class BulkImportComponent implements OnDestroy {
   }
 
   async validateAll() {
+    await this.refCheck; // the cache checks come first, so FBR only sees invoices that pass them
     const biz = this.store.business()!;
     const targets = this.invoices().map((v, i) => ({ v, i })).filter(({ i }) => !this.localIssues()[i].length);
     this.validating.set(true); this.validated.set(0);

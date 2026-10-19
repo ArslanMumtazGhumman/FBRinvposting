@@ -125,7 +125,7 @@ async function waitFor<T>(fn: () => Promise<T | undefined | false>, ms = 20_000)
 }
 
 const PATHS = ['/provinces', '/doctypecode', '/uom', '/transtypecode', '/sroitemcode', '/rates', '/rates?saleType=Goods at Reduced Rate',
-  '/hs?q=sugar', '/uom-for-hs?hs=2716.0000', '/sro?rateId=280', '/sro-items?sroId=389', '/status'];
+  '/hs?q=sugar', '/hs-check?codes=1701.9910', '/uom-for-hs?hs=2716.0000', '/sro?rateId=280', '/sro-items?sroId=389', '/status'];
 
 describe('before any token is usable', () => {
   test('lookups answer source "none" without calling FBR', async () => {
@@ -148,6 +148,10 @@ describe('before any token is usable', () => {
     assert.equal((await a.get(R('/uom-for-hs'))).status, 400);
     assert.equal((await a.get(R('/rates?date=2026-02-30'))).status, 400);
     assert.equal((await a.get(R('/sro'))).status, 400);
+    assert.equal((await a.get(R('/hs-check?codes='))).status, 400);
+    assert.equal((await a.get(R('/hs-check?codes=1701'))).status, 400);
+    const many = Array.from({ length: 101 }, (_, i) => `5${String(i).padStart(3, '0')}.0000`).join(',');
+    assert.equal((await a.get(R(`/hs-check?codes=${many}`))).status, 400);
     assert.equal((await a.get(R('/sro-items?sroId=abc'))).status, 400);
     assert.equal((await a.get(R('/itemdesccode'))).status, 400, 'the HS list is searched, not downloaded');
     assert.equal((await a.get(R('/postinvoicedata'))).status, 400);
@@ -412,6 +416,19 @@ describe('lookups', () => {
     assert.equal(callsTo('/pdi/v2/HS_UOM').length, before + 2);
   });
 
+  test('hs-check: one call says which codes FBR lists and which units each allows', async () => {
+    const r = (await a.get(R('/hs-check?codes=2716.0000,1701.9910,0000.0001,2716.0000'))).body;
+    assert.equal(r.source, 'pral');
+    assert.deepEqual(r.codes, {
+      '2716.0000': { known: true, description: 'Electrical energy', uoms: ['KWH'] },
+      '1701.9910': { known: true, description: 'REFINED SUGAR, CANE OR BEET', uoms: ['KG'] },
+      '0000.0001': { known: false, uoms: null },
+    });
+    const calls = callsTo('/pdi/v2/HS_UOM').length;
+    await a.get(R('/hs-check?codes=2716.0000,1701.9910'));
+    assert.equal(callsTo('/pdi/v2/HS_UOM').length, calls, 'units come from the cache the second time');
+  });
+
   test('a parameterised lookup expires after 12 hours; if FBR then fails the old copy is served', async () => {
     resetLookupState();
     const hsUom = and(eq(s.refLists.kind, 'HS_UOM'), eq(s.refLists.params, 'hs=2716.0000'));
@@ -458,7 +475,7 @@ describe('lookups', () => {
     mode.slowHsUom = true;
     try {
       const t = Date.now();
-      const r = (await a.get(R('/uom-for-hs?hs=1701.9910'))).body;
+      const r = (await a.get(R('/uom-for-hs?hs=8471.3020'))).body;
       assert.equal(r.source, 'none');
       assert.ok(Date.now() - t < 6000, `took ${Date.now() - t} ms`);
     } finally { mode.slowHsUom = false; resetLookupState(); }
