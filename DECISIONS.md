@@ -339,3 +339,38 @@ the brief's step 1. Where the brief and the first pass disagreed, the choices be
   `replace(code, '.', '') text_pattern_ops`. The default limit is 20, the maximum 50.
 - **The refresh takes `retry`** (default true), so tests can check a 500 without fbr-client's 15 s back-off.
 
+### Step 2: sale type → transaction type (`sale_types`)
+- **Seeded without transaction type ids.** The brief asks for a seed mapping each sale type to a `transTypeId` from
+  `transtypecode`. Those ids exist only in PRAL's live list: the spec doesn't print them, and the ids in Rasid's
+  tests are made up. Seeding ids would mean guessing. So migration 0006 seeds the 24 sale types with their scenario
+  (SN001–SN025 primary scenarios) and the `usesRetailPrice` / `exempt` flags (`src/lib/sale-types.ts`, which a
+  contract test checks against rasid-web's `SALE_TYPES`). Every row starts `needs_review` with no id.
+- **The id is filled only when the match is certain:** exactly one `transtypecode` description equals the name,
+  compared on letters and digits, ignoring case. This runs after every refresh, after a live fetch of
+  `transtypecode`, and on the first rates request if it has never run. No match, or several ids for one name, leaves
+  the id empty, `needs_review = true`, and a `review_note` naming the candidates. That sale type is left out of
+  `/rates`, so the web app keeps its bundled rates for it. Nothing is matched on similarity alone.
+- **Operators confirm by hand:** `reference-cli map-sale-type "<name>" <id>` (table owner, audited) sets the id and
+  `confirmed_at`. The automatic match never changes a confirmed row. An id not in the cached `transtypecode` is refused.
+  `auto` hands the row back to the automatic match. `reference-cli sale-types` and `GET …/reference/status`
+  (`saleTypesNeedingReview`) show what's open. The API role may update only the match columns; a check
+  constraint stops a row being marked reviewed without an id.
+- **SCENARIO_BY_SALE_TYPE in fbr-payload.ts** is now derived from the same seed module. Scenarios SN002 and
+  SN026–SN028 are buyer-type variants. They stay in rasid-web's `SCENARIOS`, not in `sale_types`.
+
+#### To confirm with PRAL (product owner)
+Until the first refresh with a real token, all 24 rows need review. After it, run `reference-cli sale-types` and
+confirm every row that still has `needs_review`. These rows are uncertain on their own wording, whatever PRAL returns:
+1. **Goods as per SRO.297(|)/2023** (SN024): the spec writes "(|)", which is most likely "(I)". A mismatch is never
+   matched automatically, so confirm the id by hand.
+2. **Non-Adjustable Supplies** (SN025): Rasid's scenario text for SN025 is "Drugs at fixed ST rate (Eighth Schedule,
+   serial 81)". That doesn't obviously describe non-adjustable supplies. Confirm which sale type SN025 expects.
+3. **Services**, **Services (FED in ST Mode)**, **Telecommunication services** (SN019, SN018, SN010): sales tax on
+   services is provincial. If PRAL lists a transaction type per province or authority, there will be several matches
+   for one name. Confirm which id applies to which seller.
+4. **Goods (FED in ST Mode)** (SN017): confirm that one transaction type covers all FED-in-ST-mode goods.
+5. **Sandbox scenarios for unregistered buyers:** `toPayload` picks a scenario by sale type only. A sandbox
+   standard-rate invoice to an unregistered buyer is therefore tagged SN001, not SN002 (or SN026 for a retailer),
+   unless the invoice sets `scenarioId`. Confirm whether PRAL's sandbox needs SN002/SN026 there. This affects
+   sandbox only; production sends no scenario.
+

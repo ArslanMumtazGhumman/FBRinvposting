@@ -12,6 +12,7 @@ import { requireAuth, requireBusiness } from '../lib/auth.js';
 import { businessIdOf, parse } from '../lib/http.js';
 import * as ref from '../reference/lookup.js';
 import { todayPk } from '../reference/pral.js';
+import { saleTypesNeedingReview } from '../reference/sale-types.js';
 import { cacheStatus } from '../reference/store.js';
 import { hasReferenceToken, referenceTokenSource } from '../reference/token.js';
 import { HsSearchQuery, ListKind, RatesQuery, SroItemsQuery, SroQuery, UomForHsQuery } from '../schemas/reference.js';
@@ -54,10 +55,11 @@ referenceRoutes.get('/sro-items', async (req, res) => {
   send(res, await ref.sroItems(q.sroId, q.date ?? todayPk()));
 });
 
-/** How fresh the cache is, and which token lookups would use (never the token itself). */
+/** How fresh the cache is, which token lookups would use (never the token itself), and unmatched sale types. */
 referenceRoutes.get('/status', async (_req, res) => {
   res.set('Cache-Control', 'no-store').json({
-    tokenConfigured: await hasReferenceToken(), tokenSource: await referenceTokenSource(), ...(await cacheStatus()),
+    tokenConfigured: await hasReferenceToken(), tokenSource: await referenceTokenSource(),
+    saleTypesNeedingReview: await saleTypesNeedingReview(), ...(await cacheStatus()),
   });
 });
 

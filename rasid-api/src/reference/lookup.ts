@@ -13,7 +13,7 @@ import {
   isParameterised, looseKey, requests, rowsOf, toDocTypes, toProvinces, toRates, toSroItemCodes, toSroItems, toSroSchedules, toTransTypes, toUoms,
   type Province, type RefRequest,
 } from './pral.js';
-import { matchSaleTypes } from './refresh.js';
+import { mappedSaleTypes, mapSaleTypes, saleTypesUnchecked } from './sale-types.js';
 import { hsCodeCount, readList, readNearest, searchHsCodes, writeList, type CachedList } from './store.js';
 import { referenceToken, rejectReferenceToken } from './token.js';
 
@@ -41,6 +41,7 @@ async function fetchLive(r: RefRequest): Promise<CachedList | null> {
           failedUntil.set(k, Date.now() + RETRY_AFTER_MS);
           return null;
         }
+        if (r.kind === 'transtypecode') await mapSaleTypes(toTransTypes(data));
         return { data, asOf: r.asOf, fetchedAt: new Date(), sourceEnv: t.source };
       } catch (e) {
         if (e instanceof FbrHttpError && e.status === 401) await rejectReferenceToken(t);
@@ -91,17 +92,22 @@ async function province(name: string): Promise<Province | undefined> {
 }
 
 /**
- * Rates for each Rasid sale type that PRAL has a transaction type for (or just
- * `saleType`), in the seller's province on `date`. Sale types PRAL doesn't list are left out.
+ * Rates for each Rasid sale type with a PRAL transaction type (sale_types), or
+ * just `saleType`, in the seller's province on `date`. Sale types without one
+ * (needs review) are left out, and the web app keeps their bundled rates.
  */
 export async function saleTypeRates(provinceName: string, date: string, saleType?: string) {
-  const [prov, types] = await Promise.all([province(provinceName), lookup(requests.transTypes())]);
-  let matched = types ? [...matchSaleTypes(toTransTypes(types.data))] : [];
-  if (saleType) matched = matched.filter(([name]) => name === saleType.trim().toLowerCase());
+  // Right after the seed, or with a cache filled before sale_types existed: match once from transtypecode.
+  if (await saleTypesUnchecked()) {
+    const types = await lookup(requests.transTypes());
+    if (types) await mapSaleTypes(toTransTypes(types.data));
+  }
+  const [prov, mapped] = await Promise.all([province(provinceName), mappedSaleTypes()]);
+  const matched = saleType ? mapped.filter(t => t.name.toLowerCase() === saleType.trim().toLowerCase()) : mapped;
   if (!prov || !matched.length) return { source: 'none' as const, saleTypes: [] };
-  const saleTypes = await mapLimit(matched, 5, async ([name, t]) => {
-    const hit = await lookup(requests.rates(t.id, prov.code, date));
-    return { saleType: name, transTypeId: t.id, transTypeDesc: t.desc, rates: hit ? toRates(hit.data) : [], asOf: hit?.asOf ?? null };
+  const saleTypes = await mapLimit(matched, 5, async t => {
+    const hit = await lookup(requests.rates(t.transTypeId, prov.code, date));
+    return { saleType: t.name.toLowerCase(), transTypeId: t.transTypeId, transTypeDesc: t.pralDesc, rates: hit ? toRates(hit.data) : [], asOf: hit?.asOf ?? null };
   });
   return { source: 'pral' as const, province: prov, date, saleTypes };
 }

@@ -8,7 +8,7 @@
  */
 import { sql } from 'drizzle-orm';
 import {
-  bigserial, check, customType, date, foreignKey, index, integer, jsonb, numeric, pgTable, primaryKey, text, timestamp, unique, uniqueIndex,
+  bigserial, boolean, check, customType, date, foreignKey, index, integer, jsonb, numeric, pgTable, primaryKey, text, timestamp, unique, uniqueIndex,
 } from 'drizzle-orm/pg-core';
 
 const ts = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
@@ -239,6 +239,33 @@ export const hsCodes = pgTable('hs_codes', {
 }, t => [
   index('hs_codes_search_idx').using('gin', t.search),
   index('hs_codes_digits_idx').on(sql`replace(${t.code}, '.', '') text_pattern_ops`),
+]);
+
+/**
+ * Rasid's sale types and PRAL's transaction type for each (seeded in
+ * drizzle/0006_sale_types.sql from src/lib/sale-types.ts). trans_type_id is
+ * filled from transtypecode when exactly one description matches the name;
+ * otherwise it stays null with needs_review and a note, and the sale type keeps
+ * its bundled rates. A row an operator confirmed (confirmed_at, reference-cli
+ * map-sale-type) is never changed by the automatic match.
+ */
+export const saleTypes = pgTable('sale_types', {
+  name: text('name').primaryKey(),
+  scenarioId: text('scenario_id').notNull(),
+  usesRetailPrice: boolean('uses_retail_price').notNull().default(false),
+  exempt: boolean('exempt').notNull().default(false),
+  transTypeId: integer('trans_type_id'),
+  /** PRAL's description for trans_type_id, as transtypecode returned it. */
+  pralDesc: text('pral_desc'),
+  needsReview: boolean('needs_review').notNull().default(true),
+  reviewNote: text('review_note').notNull().default(''),
+  /** When the automatic match last ran for this row. */
+  checkedAt: ts('checked_at'),
+  confirmedAt: ts('confirmed_at'),
+  updatedAt: updated(),
+}, t => [
+  check('sale_types_scenario', sql`${t.scenarioId} ~ '^SN0[0-2][0-9]$'`),
+  check('sale_types_mapped_or_review', sql`${t.transTypeId} is not null or ${t.needsReview}`),
 ]);
 
 /**

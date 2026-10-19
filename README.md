@@ -119,9 +119,14 @@ copy. `source: "none"` means there's no PRAL copy yet, and the web app falls bac
 | `GET /uom-for-hs?hs=1701.9910` | Units FBR accepts for an HS code (`HS_UOM`, sales annexure) |
 | `GET /sro?rateId&date&province`, `GET /sro-items?sroId&date` | SRO schedules for a PRAL rate, items of a schedule |
 | `GET /:kind` | `provinces`, `doctypecode`, `uom`, `transtypecode`, `sroitemcode` as PRAL lists them → `{ items }` |
-| `GET /status` | Cache freshness per list, and which token lookups use: `platform`, `production`, `sandbox` or none (never the token) |
+| `GET /status` | Cache freshness per list, which token lookups use (`platform`, `production`, `sandbox` or none; never the token), and `saleTypesNeedingReview` |
 
-Operators: `node dist/reference-cli.js set-token | clear-token | refresh [YYYY-MM-DD] | status` (in compose:
+Sale types map to PRAL transaction types through the `sale_types` table. A mapping is made automatically only
+when exactly one `transtypecode` description matches. Every other sale type is flagged for review and keeps its
+bundled rates until an operator confirms its id with `map-sale-type`.
+
+Operators: `node dist/reference-cli.js set-token | clear-token | refresh [YYYY-MM-DD] | status | sale-types |
+map-sale-type "<sale type>" <transTypeId|auto>` (in compose:
 `docker compose run --rm migrate node dist/reference-cli.js …`). The schedule is `REFERENCE_REFRESH_CRON`
 (default `0 2 * * *`, Pakistan time).
 

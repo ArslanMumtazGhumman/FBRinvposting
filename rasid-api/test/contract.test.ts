@@ -55,12 +55,17 @@ test("the worker's payload builder emits exactly those fields, and nothing else"
   assert.equal('scenarioId' in prod, false);
 });
 
-test("the API's sale types (for PRAL rate lookups) are exactly rasid-web's SALE_TYPES", async () => {
-  const { KNOWN_SALE_TYPES } = await import('../src/lib/fbr-payload.js');
+test("the API's sale types (sale_types seed) match rasid-web's SALE_TYPES: names, scenarios and flags", async () => {
+  const { SALE_TYPE_SEED } = await import('../src/lib/sale-types.js');
   const ref = fs.readFileSync(fileURLToPath(new URL('../../rasid-web/src/app/core/fbr-reference.ts', import.meta.url)), 'utf8');
   const block = /export const SALE_TYPES[^=]*= \[([\s\S]*?)\n\];/.exec(ref)?.[1];
   assert.ok(block, 'SALE_TYPES not found in fbr-reference.ts');
-  const web = [...block.matchAll(/name: '([^']+)'/g)].map(m => m[1]!.toLowerCase()).sort();
+  const web = block.split('\n').filter(l => l.includes('name:')).map(l => ({
+    name: /name: '([^']+)'/.exec(l)![1]!,
+    scenarioId: /scenario: '(SN\d{3})'/.exec(l)![1]!,
+    usesRetailPrice: /usesRetailPrice: true/.test(l),
+    exempt: /exempt: true/.test(l),
+  }));
   assert.equal(web.length, 24);
-  assert.deepEqual([...KNOWN_SALE_TYPES].sort(), web);
+  assert.deepEqual(SALE_TYPE_SEED.map(t => ({ name: t.name, scenarioId: t.scenarioId, usesRetailPrice: !!t.usesRetailPrice, exempt: !!t.exempt })), web);
 });

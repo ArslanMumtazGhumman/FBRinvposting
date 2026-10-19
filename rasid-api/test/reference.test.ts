@@ -53,6 +53,10 @@ const fake = http.createServer((req, res) => {
       { transactioN_TYPE_ID: 24, transactioN_DESC: 'Goods at Reduced Rate' },
       { transactioN_TYPE_ID: 82, transactioN_DESC: 'DTRE goods' },
       { transactioN_TYPE_ID: 111, transactioN_DESC: 'Processing/Conversion of Goods' },
+      // Two ids for one description, and Rasid's "(|)" spelled "(I)": both must be flagged for review, not guessed.
+      { transactioN_TYPE_ID: 18, transactioN_DESC: 'Services' },
+      { transactioN_TYPE_ID: 19, transactioN_DESC: 'Services ' },
+      { transactioN_TYPE_ID: 139, transactioN_DESC: 'Goods as per SRO.297(I)/2023' },
     ]);
     case '/pdi/v1/itemdesccode': return send(mode.shortHsList ? HS.slice(0, 10) : HS);
     case '/pdi/v2/SaleTypeToRate': return send(RATES[q('transTypeId')]?.[q('originationSupplier')] ?? []);
@@ -79,6 +83,7 @@ const { refreshReference } = await import('../src/reference/refresh.js');
 const { resetLookupState } = await import('../src/reference/lookup.js');
 const { todayPk } = await import('../src/reference/pral.js');
 const s = await import('../src/db/schema.js');
+const { SALE_TYPE_SEED } = await import('../src/lib/sale-types.js');
 
 const app = await startApp();
 const A = await createTenant(tdb, 'alpha');
@@ -152,6 +157,20 @@ describe('before any token is usable', () => {
     for (const p of ['/uom', '/rates', '/hs', '/status']) {
       for (const method of ['POST', 'PUT', 'DELETE']) assert.equal((await a.req(method, R(p), {})).status, 404, `${method} ${p}`);
     }
+  });
+
+  test('sale_types is seeded with every sale type, its scenario and flags, and nothing mapped yet', async () => {
+    const rows = await tdb.admin.select().from(s.saleTypes);
+    const byName = new Map(rows.map(r => [r.name, r]));
+    assert.equal(rows.length, SALE_TYPE_SEED.length);
+    for (const t of SALE_TYPE_SEED) {
+      const r = byName.get(t.name);
+      assert.ok(r, t.name);
+      assert.deepEqual([r.scenarioId, r.usesRetailPrice, r.exempt], [t.scenarioId, !!t.usesRetailPrice, !!t.exempt], t.name);
+      assert.deepEqual([r.transTypeId, r.needsReview, r.confirmedAt], [null, true, null], t.name);
+    }
+    assert.deepEqual(rows.filter(r => r.usesRetailPrice).map(r => r.name), ['3rd Schedule Goods']);
+    assert.deepEqual(rows.filter(r => r.exempt).map(r => r.name), ['Exempt Goods']);
   });
 
   test('the old unscoped routes are gone', async () => {
@@ -460,7 +479,7 @@ describe('lookups', () => {
     assert.deepEqual((await items('uom')).map((u: { description: string }) => u.description), ['KG', 'Numbers, pieces, units', 'KWH']);
     assert.deepEqual(await items('doctypecode'), [{ id: 4, desc: 'Sale Invoice' }, { id: 9, desc: 'Debit Note' }]);
     assert.deepEqual(await items('sroitemcode'), [{ id: 724, desc: '9' }, { id: 728, desc: '1' }]);
-    assert.equal((await items('transtypecode')).length, 4);
+    assert.equal((await items('transtypecode')).length, 7);
   });
 
   test('no response, header or cached row contains the token', async () => {
@@ -487,5 +506,78 @@ describe('lookups', () => {
     assert.equal(JSON.parse(r.out).date, '2026-10-01');
     assert.ok(!r.out.includes(REF_TOKEN));
     assert.equal((await cli(['refresh', 'yesterday'])).code, 1);
+  });
+});
+
+describe('sale type → transaction type', () => {
+  const row = async (name: string) => (await tdb.admin.select().from(s.saleTypes).where(eq(s.saleTypes.name, name)))[0]!;
+  const SRO = 'Goods as per SRO.297(|)/2023';
+
+  test('only a single exact match (letters and digits) is mapped; the rest wait for review with a reason', async () => {
+    const std = await row('Goods at standard rate (default)');
+    assert.deepEqual([std.transTypeId, std.pralDesc, std.needsReview, std.reviewNote], [75, 'Goods at standard rate (default)', false, '']);
+    assert.deepEqual([(await row('Goods at Reduced Rate')).transTypeId, (await row('Processing/ Conversion of Goods')).transTypeId], [24, 111]);
+    assert.equal((await row('Processing/ Conversion of Goods')).pralDesc, 'Processing/Conversion of Goods');
+
+    const services = await row('Services');
+    assert.deepEqual([services.transTypeId, services.needsReview], [null, true]);
+    assert.match(services.reviewNote, /Several transaction types match: 18 "Services", 19 "Services"/);
+    const sro = await row(SRO);
+    assert.deepEqual([sro.transTypeId, sro.needsReview], [null, true]);
+    assert.match(sro.reviewNote, /No transaction type/);
+
+    const status = (await a.get(R('/status'))).body;
+    assert.equal(status.saleTypesNeedingReview.length, SALE_TYPE_SEED.length - 3);
+    assert.ok(status.saleTypesNeedingReview.includes('Services') && status.saleTypesNeedingReview.includes(SRO));
+    assert.ok(!(await a.get(R('/rates'))).body.saleTypes.some((t: { saleType: string }) => t.saleType === 'services'), 'unmapped: bundled rates');
+  });
+
+  test('the API role can record the automatic match but not confirm, add or remove sale types', async () => {
+    const appSql = (await import('postgres')).default(tdb.appUrl, { max: 1, onnotice: () => {} });
+    try {
+      await assert.rejects(appSql`update sale_types set confirmed_at = now() where name = 'Services'`, /permission denied/);
+      await assert.rejects(appSql`update sale_types set scenario_id = 'SN002' where name = 'Services'`, /permission denied/);
+      await assert.rejects(appSql`insert into sale_types (name, scenario_id) values ('Made up', 'SN001')`, /permission denied/);
+      await assert.rejects(appSql`delete from sale_types`, /permission denied/);
+      await assert.rejects(appSql`update sale_types set needs_review = false where name = 'Services'`, /sale_types_mapped_or_review/);
+    } finally { await appSql.end(); }
+  });
+
+  test('an operator confirms a mapping; refreshes leave it alone and rates use it', async () => {
+    assert.equal((await cli(['map-sale-type', SRO, '555'])).code, 1, 'an id PRAL does not list is refused');
+    assert.equal((await cli(['map-sale-type', 'Made up', '139'])).code, 1);
+    const r = await cli(['map-sale-type', SRO, '139']);
+    assert.equal(r.code, 0, r.out);
+    const sro = await row(SRO);
+    assert.deepEqual([sro.transTypeId, sro.pralDesc, sro.needsReview], [139, 'Goods as per SRO.297(I)/2023', false]);
+    assert.ok(sro.confirmedAt);
+    assert.equal((await tdb.admin.select().from(s.auditLog).where(eq(s.auditLog.action, 'sale_type_mapped'))).length, 1);
+
+    const summary = await refreshReference({ token: REF_TOKEN });
+    assert.equal((await row(SRO)).transTypeId, 139, 'the automatic match does not undo it');
+    assert.ok(!summary.saleTypesNeedingReview.includes(SRO));
+    assert.ok(callsTo('/pdi/v2/SaleTypeToRate').some(c => c.query.get('transTypeId') === '139'));
+    const rates = (await a.get(R(`/rates?saleType=${encodeURIComponent(SRO)}`))).body;
+    assert.deepEqual(rates.saleTypes.map((t: { saleType: string; transTypeId: number }) => [t.saleType, t.transTypeId]), [[SRO.toLowerCase(), 139]]);
+
+    assert.equal((await cli(['map-sale-type', SRO, 'auto'])).code, 0);
+    assert.deepEqual([(await row(SRO)).transTypeId, (await row(SRO)).needsReview, (await row(SRO)).confirmedAt], [null, true, null]);
+  });
+
+  test('a cache filled before sale_types existed is matched on the first rates request', async () => {
+    await tdb.admin.update(s.saleTypes).set({ transTypeId: null, pralDesc: null, needsReview: true, checkedAt: null });
+    const calls = callsTo('/pdi/v1/transtypecode').length;
+    const r = (await a.get(R('/rates'))).body;
+    assert.equal(r.saleTypes.length, 3);
+    assert.equal(callsTo('/pdi/v1/transtypecode').length, calls, 'matched from the cached list');
+    assert.equal((await row('Goods at Reduced Rate')).transTypeId, 24);
+  });
+
+  test('reference-cli sale-types lists every row', async () => {
+    const r = await cli(['sale-types']);
+    assert.equal(r.code, 0, r.out);
+    const rows = JSON.parse(r.out) as { name: string; scenarioId: string }[];
+    assert.equal(rows.length, SALE_TYPE_SEED.length);
+    assert.equal(rows[0]!.scenarioId, 'SN001');
   });
 });

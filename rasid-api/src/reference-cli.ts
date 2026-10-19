@@ -6,6 +6,8 @@
  *   node dist/reference-cli.js clear-token
  *   node dist/reference-cli.js refresh [YYYY-MM-DD]
  *   node dist/reference-cli.js status
+ *   node dist/reference-cli.js sale-types
+ *   node dist/reference-cli.js map-sale-type "<sale type>" <transTypeId|auto>   # needs MIGRATION_DATABASE_URL
  *
  * The token is Rasid's own PRAL token (any valid one; reference lists are the
  * same for everyone). It is stored sealed, never printed, and never sent
@@ -16,12 +18,15 @@ import readline from 'node:readline';
 import { Writable } from 'node:stream';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
-import { closeDb } from './db/client.js';
+import { eq } from 'drizzle-orm';
+import { closeDb, db } from './db/client.js';
 import * as schema from './db/schema.js';
 import { audit } from './lib/audit.js';
 import { fbr } from './lib/fbr-client.js';
 import { refreshReference } from './reference/refresh.js';
-import { cacheStatus } from './reference/store.js';
+import { requests, toTransTypes } from './reference/pral.js';
+import { allSaleTypes, matchSaleType, saleTypesNeedingReview } from './reference/sale-types.js';
+import { cacheStatus, readList } from './reference/store.js';
 import { hasReferenceToken, referenceToken, referenceTokenSource, rejectReferenceToken, sealReferenceToken } from './reference/token.js';
 
 const [command, arg] = process.argv.slice(2);
@@ -78,10 +83,43 @@ async function main() {
       break;
     }
     case 'status':
-      console.log(JSON.stringify({ tokenConfigured: await hasReferenceToken(), tokenSource: await referenceTokenSource(), ...(await cacheStatus()) }, null, 2));
+      console.log(JSON.stringify({
+        tokenConfigured: await hasReferenceToken(), tokenSource: await referenceTokenSource(),
+        saleTypesNeedingReview: await saleTypesNeedingReview(), ...(await cacheStatus()),
+      }, null, 2));
       break;
+    case 'sale-types':
+      console.log(JSON.stringify(await allSaleTypes(), null, 2));
+      break;
+    case 'map-sale-type': {
+      // map-sale-type "<sale type>" <transTypeId>: confirm a mapping by hand; "auto" hands it back to the automatic match.
+      const name = arg ?? '';
+      const target = process.argv[4] ?? '';
+      const [row] = await db.select().from(schema.saleTypes).where(eq(schema.saleTypes.name, name));
+      if (!row) throw new Error(`No sale type named "${name}". Run "sale-types" for the list.`);
+      const types = toTransTypes((await readList(requests.transTypes()))?.data);
+      let set: Partial<typeof schema.saleTypes.$inferInsert>;
+      if (target === 'auto') {
+        set = types.length
+          ? { ...matchSaleType(name, types), confirmedAt: null, checkedAt: new Date() }
+          : { transTypeId: null, pralDesc: null, needsReview: true, reviewNote: 'Not matched yet: waits for PRAL’s transtypecode list.', confirmedAt: null, checkedAt: null };
+      } else {
+        if (!/^\d+$/.test(target)) throw new Error('Give a transaction type id (number) or "auto".');
+        const id = Number(target);
+        const known = types.find(t => t.id === id);
+        if (types.length && !known) throw new Error(`${id} is not in PRAL's cached transtypecode list. Refresh first if PRAL added it.`);
+        set = { transTypeId: id, pralDesc: known?.desc ?? null, needsReview: false, reviewNote: 'Confirmed by an operator.', confirmedAt: new Date() };
+      }
+      await asOwner(async tx => {
+        await tx.update(schema.saleTypes).set({ ...set, updatedAt: new Date() }).where(eq(schema.saleTypes.name, name));
+        await audit({ actor: 'cli', action: 'sale_type_mapped', detail: `${name} → ${target}` }, tx);
+      });
+      const [after] = await db.select().from(schema.saleTypes).where(eq(schema.saleTypes.name, name));
+      console.log(JSON.stringify(after, null, 2));
+      break;
+    }
     default:
-      console.error('Usage: reference-cli set-token | clear-token | refresh [YYYY-MM-DD] | status');
+      console.error('Usage: reference-cli set-token | clear-token | refresh [YYYY-MM-DD] | status | sale-types | map-sale-type "<name>" <id|auto>');
       process.exitCode = 1;
   }
 }

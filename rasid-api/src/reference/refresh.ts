@@ -3,7 +3,8 @@
  * (queue/reference.ts) and on demand from `reference-cli refresh`.
  *
  *   1. provinces, doctypecode, uom, transtypecode, sroitemcode, itemdesccode (HS codes)
- *   2. SaleTypeToRate for every Rasid sale type × province, for `date`
+ *   2. Rasid's sale types matched to transaction types (sale-types.ts), then
+ *      SaleTypeToRate for every matched sale type × province, for `date`
  *   3. SroSchedule for every rate found, then SROItem for every schedule
  *   4. HS_UOM again for each HS code someone has looked up
  *   5. dated copies older than `keepDays` are dropped
@@ -17,12 +18,12 @@
  * customer's fallback token ('production' / 'sandbox'); see token.ts.
  */
 import { fbr, FbrHttpError } from '../lib/fbr-client.js';
-import { KNOWN_SALE_TYPES } from '../lib/fbr-payload.js';
 import {
-  looseKey, requests, rowsOf, todayPk, toDocTypes, toHsCodes, toProvinces, toRates, toSroItemCodes, toSroItems, toSroSchedules, toTransTypes, toUoms,
-  type RefRequest, type TransType,
+  requests, rowsOf, todayPk, toDocTypes, toHsCodes, toProvinces, toRates, toSroItemCodes, toSroItems, toSroSchedules, toTransTypes, toUoms,
+  type RefRequest,
 } from './pral.js';
 import type { ReferenceSource } from '../db/schema.js';
+import { mapSaleTypes, mappedSaleTypes } from './sale-types.js';
 import { cachedParams, hsCodeCount, pruneDated, readList, replaceHsCodes, writeList } from './store.js';
 
 export interface RefreshOptions {
@@ -42,18 +43,9 @@ export interface RefreshSummary {
   failed: { list: string; error: string }[];
   calls: number;
   stoppedBy401: boolean;
+  /** Sale types with no certain PRAL transaction type (sale_types.needs_review). */
+  saleTypesNeedingReview: string[];
   ms: number;
-}
-
-/** Rasid's sale types (lower case) → PRAL transaction type, matched on letters and digits. */
-export function matchSaleTypes(transTypes: TransType[]): Map<string, TransType> {
-  const byKey = new Map(transTypes.map(t => [looseKey(t.desc), t]));
-  const out = new Map<string, TransType>();
-  for (const name of KNOWN_SALE_TYPES) {
-    const t = byKey.get(looseKey(name));
-    if (t) out.set(name, t);
-  }
-  return out;
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e)).replace(/Bearer\s+\S+/g, 'Bearer [redacted]').slice(0, 200);
@@ -63,7 +55,7 @@ export async function refreshReference(opts: RefreshOptions): Promise<RefreshSum
   const date = opts.date ?? todayPk();
   const concurrency = opts.concurrency ?? 4;
   const source = opts.source ?? 'platform';
-  const s: RefreshSummary = { date, source, counts: {}, failed: [], calls: 0, stoppedBy401: false, ms: 0 };
+  const s: RefreshSummary = { date, source, counts: {}, failed: [], calls: 0, stoppedBy401: false, saleTypesNeedingReview: [], ms: 0 };
 
   const get = async (r: RefRequest) => {
     if (s.stoppedBy401) throw new Error('stopped: FBR rejected the reference token');
@@ -110,11 +102,13 @@ export async function refreshReference(opts: RefreshOptions): Promise<RefreshSum
     s.counts.itemdesccode = await replaceHsCodes(list, source);
   } catch (e) { s.failed.push({ list: 'itemdesccode', error: message(e) }); }
 
-  // 2. Rates, from whichever copy of provinces / transaction types is cached now.
+  // 2. Sale types → transaction types (sale_types), then rates, from whichever copies of
+  //    provinces and transaction types are cached now.
+  s.saleTypesNeedingReview = await mapSaleTypes(toTransTypes((await readList(requests.transTypes()))?.data));
   const provinces = toProvinces((await readList(requests.provinces()))?.data);
-  const saleTypes = matchSaleTypes(toTransTypes((await readList(requests.transTypes()))?.data));
-  s.counts.saleTypesMatched = saleTypes.size;
-  const rateJobs = [...saleTypes.values()].flatMap(t => provinces.map(p => ({ province: p.code, req: requests.rates(t.id, p.code, date) })));
+  const saleTypes = await mappedSaleTypes();
+  s.counts.saleTypesMatched = saleTypes.length;
+  const rateJobs = saleTypes.flatMap(t => provinces.map(p => ({ province: p.code, req: requests.rates(t.transTypeId, p.code, date) })));
   const schedules = new Map<string, RefRequest>();
   let rates = 0;
   await each('SaleTypeToRate', rateJobs, async ({ province, req }) => {

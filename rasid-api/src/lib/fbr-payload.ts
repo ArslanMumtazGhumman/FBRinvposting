@@ -7,40 +7,13 @@ import type { FieldIssue } from '../db/schema.js';
 import type { InvoiceDto } from '../repos/invoices.js';
 import type { FbrInvoicePayload } from '../schemas/invoice.js';
 import type { FbrJson } from './fbr-client.js';
+import { SALE_TYPE_SEED } from './sale-types.js';
 
 export const cleanNtn = (v: string) => String(v ?? '').replace(/[^0-9]/g, '');
 export const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
-/** Primary sandbox scenario per sale type (rasid-web fbr-reference.ts SALE_TYPES). */
-const SCENARIO_BY_SALE_TYPE: Record<string, string> = {
-  'goods at standard rate (default)': 'SN001',
-  'steel melting and re-rolling': 'SN003',
-  'ship breaking': 'SN004',
-  'goods at reduced rate': 'SN005',
-  'exempt goods': 'SN006',
-  'goods at zero-rate': 'SN007',
-  '3rd schedule goods': 'SN008',
-  'cotton ginners': 'SN009',
-  'telecommunication services': 'SN010',
-  'toll manufacturing': 'SN011',
-  'petroleum products': 'SN012',
-  'electricity supply to retailers': 'SN013',
-  'gas to cng stations': 'SN014',
-  'mobile phones': 'SN015',
-  'processing/ conversion of goods': 'SN016',
-  'goods (fed in st mode)': 'SN017',
-  'services (fed in st mode)': 'SN018',
-  'services': 'SN019',
-  'electric vehicle': 'SN020',
-  'cement /concrete block': 'SN021',
-  'potassium chlorate': 'SN022',
-  'cng sales': 'SN023',
-  'goods as per sro.297(|)/2023': 'SN024',
-  'non-adjustable supplies': 'SN025',
-};
-
-/** The sale types Rasid offers, lower case (rasid-web SALE_TYPES; checked by test/contract.test.ts). */
-export const KNOWN_SALE_TYPES = Object.keys(SCENARIO_BY_SALE_TYPE);
+/** Primary sandbox scenario per sale type, lower case (lib/sale-types.ts). */
+const SCENARIO_BY_SALE_TYPE: Record<string, string> = Object.fromEntries(SALE_TYPE_SEED.map(t => [t.name.toLowerCase(), t.scenarioId]));
 
 export interface Seller { ntnCnic: string; name: string; province: string; address: string }
 
