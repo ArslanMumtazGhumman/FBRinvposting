@@ -14,7 +14,7 @@ export const businessRoutes = Router();
 /** Public shape of a business (matches Business in rasid-web models.ts, minus token flags). */
 export const toBusinessDto = (b: Business) => ({
   id: b.id, name: b.name, ntnCnic: b.ntnCnic, province: b.province, address: b.address, activity: b.activity,
-  sector: b.sector, environment: b.environment, defaultSaleType: b.defaultSaleType, furtherTaxRate: b.furtherTaxRate,
+  sector: b.sector, environment: b.environment, defaultSaleType: b.defaultSaleType, furtherTaxRate: b.furtherTaxRate, furtherTaxRates: b.furtherTaxRates,
   invoicePrefix: b.invoicePrefix, nextInvoiceNo: b.nextInvoiceNo,
 });
 

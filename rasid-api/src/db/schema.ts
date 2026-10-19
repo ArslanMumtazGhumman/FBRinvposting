@@ -20,6 +20,7 @@ const tsvector = customType<{ data: string }>({ dataType: () => 'tsvector' });
 export type Role = 'owner' | 'accountant' | 'viewer';
 export type FbrEnv = 'sandbox' | 'production';
 export type ReferenceSource = 'platform' | FbrEnv;
+export interface FurtherTaxRate { rate: number; from: string }
 export type InvoiceStatus = 'draft' | 'validated' | 'queued' | 'posting' | 'posted' | 'failed' | 'outcome_unknown';
 export type InvoiceType = 'Sale Invoice' | 'Debit Note';
 export type RegistrationType = 'Registered' | 'Unregistered';
@@ -77,7 +78,10 @@ export const businesses = pgTable('businesses', {
   sector: text('sector').notNull(),
   environment: text('environment').$type<FbrEnv>().notNull().default('sandbox'),
   defaultSaleType: text('default_sale_type').notNull().default('Goods at standard rate (default)'),
+  /** Further tax (%) before the first dated change. The default 4 is still to be confirmed (DECISIONS.md). */
   furtherTaxRate: numeric('further_tax_rate', { mode: 'number' }).notNull().default(4),
+  /** Dated changes: [{ rate, from: 'YYYY-MM-DD' }], sorted by from; the latest on or before an invoice's date applies. */
+  furtherTaxRates: jsonb('further_tax_rates').$type<FurtherTaxRate[]>().notNull().default(sql`'[]'::jsonb`),
   invoicePrefix: text('invoice_prefix').notNull().default('INV-'),
   nextInvoiceNo: integer('next_invoice_no').notNull().default(1),
   createdAt: created(),

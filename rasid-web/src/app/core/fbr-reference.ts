@@ -9,6 +9,12 @@
  * not in PRAL's lists and live only here.
  */
 
+/**
+ * Further tax (%) a new business starts with. UNCONFIRMED: kept from the first
+ * version and still to be confirmed by the product owner before release (DECISIONS.md, milestone 2 step 4).
+ */
+export const FURTHER_TAX_DEFAULT = 4;
+
 export const PROVINCES = [
   'Punjab', 'Sindh', 'Khyber Pakhtunkhwa', 'Balochistan',
   'Capital Territory', 'Gilgit Baltistan', 'Azad Jammu and Kashmir',

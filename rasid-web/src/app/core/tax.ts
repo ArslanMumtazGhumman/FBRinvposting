@@ -1,12 +1,49 @@
 import { Buyer, FbrInvoicePayload, FbrItem, FieldIssue, Invoice, LineItem, Business } from './models';
-import { FBR_ERROR_HELP, HS_UOM_RULES, PROVINCES, saleTypeDef } from './fbr-reference';
+import { FBR_ERROR_HELP, HS_UOM_RULES, PROVINCES, SaleTypeDef, saleTypeDef } from './fbr-reference';
+import { parseRate, perUnitTax } from './rate';
 
 export const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
-/** "18%" → 18, "Exempt" → 0, "18% along with rupees 60 per kilogram" → 18 */
+/** The percentage part of a rate: "18%" → 18, "Exempt" → 0, "18% along with rupees 60 per kilogram" → 18 (see rate.ts). */
 export function rateValue(rate: string): number {
-  const m = /(-?\d+(?:\.\d+)?)\s*%/.exec(rate ?? '');
-  return m ? parseFloat(m[1]) : 0;
+  return parseRate(rate).percent;
+}
+
+/** What a line's tax depends on besides the line itself. */
+export interface TaxContext {
+  /** Further tax (%) for unregistered buyers, on the invoice date (furtherTaxRateOn). */
+  furtherTaxRate: number;
+  /** PRAL's numeric percentage for the line's rate when the API gave one; the rate text is parsed otherwise. */
+  ratePercent?: (saleType: string, rate: string) => number | undefined;
+}
+
+/**
+ * The business's further-tax rate on `date`: the latest change effective on or
+ * before it (Business.furtherTaxRates), else the business's base rate.
+ */
+export function furtherTaxRateOn(biz: Pick<Business, 'furtherTaxRate' | 'furtherTaxRates'>, date: string): number {
+  const change = (biz.furtherTaxRates ?? []).filter(r => r.from <= date).sort((a, b) => b.from.localeCompare(a.from))[0];
+  return change ? change.rate : biz.furtherTaxRate;
+}
+
+/** The context for an invoice of `biz` dated `date`; pass ReferenceService.checks().rateValue for PRAL's numbers. */
+export function taxContext(biz: Pick<Business, 'furtherTaxRate' | 'furtherTaxRates'>, date: string,
+  rateValueOf?: (saleType: string, rate: string, date: string) => number | undefined): TaxContext {
+  return { furtherTaxRate: furtherTaxRateOn(biz, date), ratePercent: rateValueOf && ((st, r) => rateValueOf(st, r, date)) };
+}
+
+/**
+ * Sales tax on a line: base × percentage, plus any fixed amount per unit
+ * ("18% along with rupees 60 per kilogram" on 10 KG adds Rs 600). Base is the
+ * retail price for 3rd schedule goods, else the value excluding tax.
+ */
+export function lineSalesTax(line: Pick<LineItem, 'rate' | 'saleType' | 'uoM' | 'quantity' | 'valueSalesExcludingST' | 'fixedNotifiedValueOrRetailPrice'>, def: SaleTypeDef | undefined, ratePercent?: TaxContext['ratePercent']): { salesTax: number; taxable: boolean } {
+  const parsed = parseRate(line.rate);
+  if (def?.exempt || parsed.exempt) return { salesTax: 0, taxable: false };
+  const pct = ratePercent?.(line.saleType, line.rate) ?? parsed.percent;
+  const base = def?.usesRetailPrice ? (Number(line.fixedNotifiedValueOrRetailPrice) || 0) : (Number(line.valueSalesExcludingST) || 0);
+  const fixed = perUnitTax(parsed.perUnit, line.uoM, Number(line.quantity) || 0);
+  return { salesTax: round2(base * pct / 100 + fixed), taxable: pct > 0 || fixed > 0 };
 }
 
 /** Normalise user rate input: 18 / 0.18 / "18" / "18 %" → "18%". */
@@ -25,20 +62,19 @@ export function normaliseRate(input: unknown): string {
 
 /**
  * Recompute derived values of a line.
- * value = qty × unitPrice (if unitPrice given), sales tax from rate,
- * further tax for unregistered buyers on taxable goods, total incl. taxes.
+ * value = qty × unitPrice (if unitPrice given), sales tax from the rate (PRAL's
+ * number when the context has one), further tax for unregistered buyers on
+ * taxable goods, total incl. taxes. A plain number is the further-tax rate.
  */
-export function computeLine(line: LineItem, buyer: Buyer, furtherTaxRate: number): LineItem {
+export function computeLine(line: LineItem, buyer: Buyer, ctx: TaxContext | number): LineItem {
+  const { furtherTaxRate, ratePercent } = typeof ctx === 'number' ? { furtherTaxRate: ctx, ratePercent: undefined } : ctx;
   const def = saleTypeDef(line.saleType);
   const qty = Number(line.quantity) || 0;
   let value = Number(line.valueSalesExcludingST) || 0;
   if (line.unitPrice && qty) value = round2(qty * line.unitPrice);
 
-  const r = rateValue(line.rate);
-  const base = def?.usesRetailPrice ? (Number(line.fixedNotifiedValueOrRetailPrice) || 0) : value;
-  const salesTax = def?.exempt ? 0 : round2(base * r / 100);
-  const further = buyer.registrationType === 'Unregistered' && r > 0 && !def?.exempt
-    ? round2(value * furtherTaxRate / 100) : 0;
+  const { salesTax, taxable } = lineSalesTax({ ...line, valueSalesExcludingST: value }, def, ratePercent);
+  const further = buyer.registrationType === 'Unregistered' && taxable ? round2(value * furtherTaxRate / 100) : 0;
   const total = round2(value + salesTax + further + (+line.extraTax || 0) + (+line.fedPayable || 0) - (+line.discount || 0));
 
   return { ...line, valueSalesExcludingST: value, salesTaxApplicable: salesTax, furtherTax: further, totalValues: total };
@@ -137,9 +173,8 @@ export function validateInvoice(inv: Invoice, seller: Business, ref: ReferenceCh
     if (!(it.valueSalesExcludingST > 0) && !def?.usesRetailPrice) add('0021', 'Provide value of sales excl. ST', 'valueSalesExcludingST', i);
     if (def?.usesRetailPrice && !(it.fixedNotifiedValueOrRetailPrice > 0)) add('0090', 'Provide retail price', 'fixedNotifiedValueOrRetailPrice', i);
 
-    const r = rateValue(it.rate);
-    const base = def?.usesRetailPrice ? it.fixedNotifiedValueOrRetailPrice : it.valueSalesExcludingST;
-    const expected = def?.exempt ? 0 : round2(base * r / 100);
+    const r = checks.rateValue?.(it.saleType, it.rate, inv.invoiceDate) ?? rateValue(it.rate);
+    const expected = lineSalesTax(it, def, () => r).salesTax;
     if (Math.abs(expected - it.salesTaxApplicable) > 1) {
       add(def?.usesRetailPrice ? '0102' : '0104', `Sales tax should be ${expected.toFixed(2)}`, 'salesTaxApplicable', i);
     }

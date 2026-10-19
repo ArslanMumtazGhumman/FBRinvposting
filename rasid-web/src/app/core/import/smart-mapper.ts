@@ -1,6 +1,6 @@
 import { Business, Invoice, LineItem, RegistrationType } from '../models';
 import { PROVINCES, SALE_TYPES, UOMS, saleTypeDef } from '../fbr-reference';
-import { cleanNtn, computeLine, emptyLine, normaliseRate } from '../tax';
+import { cleanNtn, computeLine, emptyLine, normaliseRate, taxContext } from '../tax';
 import { norm, nowIso, similarity, uid } from '../util';
 
 /** Target fields a sheet column can map to. */
@@ -220,6 +220,8 @@ export function buildInvoices(rows: Record<string, unknown>[], map: Record<strin
       registrationType,
     };
     const typeRaw = norm(get(first, 'invoiceType'));
+    const invoiceDate = toIsoDate(get(first, 'invoiceDate'));
+    const ctx = taxContext(biz, invoiceDate);
     const items: LineItem[] = idxs.map(ri => {
       const r = rows[ri];
       const saleType = matchSaleType(get(r, 'saleType'), biz.defaultSaleType);
@@ -243,7 +245,7 @@ export function buildInvoices(rows: Record<string, unknown>[], map: Record<strin
         salesTaxWithheldAtSource: num(get(r, 'salesTaxWithheldAtSource')),
       };
       if (!line.unitPrice && line.valueSalesExcludingST && line.quantity) line.unitPrice = line.valueSalesExcludingST / line.quantity;
-      const computed = computeLine(line, buyer, biz.furtherTaxRate);
+      const computed = computeLine(line, buyer, ctx);
       // Keep sheet-provided tax amounts when present so mismatches surface instead of being silently overwritten.
       const stIn = get(r, 'salesTaxApplicable');
       if (map['salesTaxApplicable'] && stIn !== '' && stIn !== undefined) computed.salesTaxApplicable = num(stIn);
@@ -260,7 +262,7 @@ export function buildInvoices(rows: Record<string, unknown>[], map: Record<strin
       id: uid('i_'), businessId: biz.id,
       localRef: key.startsWith('__row') ? `${biz.invoicePrefix}IMP-${batchId.slice(-4).toUpperCase()}-${++auto}` : key,
       invoiceType: typeRaw.includes('debit') ? 'Debit Note' : 'Sale Invoice',
-      invoiceDate: toIsoDate(get(first, 'invoiceDate')),
+      invoiceDate,
       buyer, items, invoiceRefNo: String(get(first, 'invoiceRefNo') ?? '').trim(),
       environment: biz.environment, status: 'draft', issues: [], attempts: 0, batchId,
       createdAt: at, updatedAt: at, history: [{ at, actor: 'import', action: 'Imported from spreadsheet' }],

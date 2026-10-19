@@ -8,7 +8,7 @@ import { FieldIssue, Invoice, LineItem } from '../../core/models';
 import { PostingService } from '../../core/posting.service';
 import { HsOption, ReferenceService, SroOption } from '../../core/reference.service';
 import { Store } from '../../core/store';
-import { cleanNtn, computeLine, emptyLine, invoiceTotals, validateInvoice } from '../../core/tax';
+import { cleanNtn, computeLine, emptyLine, furtherTaxRateOn, invoiceTotals, taxContext, validateInvoice } from '../../core/tax';
 import { UiService } from '../../core/ui.service';
 import { formatPkr, nowIso, todayIso, uid } from '../../core/util';
 import { IconComponent } from '../../shared/icon.component';
@@ -66,7 +66,7 @@ import { StatusChipComponent } from '../../shared/status-chip.component';
                 <button type="button" [class.on]="v.buyer.registrationType === 'Registered'" (click)="setBuyer('registrationType', 'Registered')">Registered</button>
                 <button type="button" [class.on]="v.buyer.registrationType === 'Unregistered'" (click)="setBuyer('registrationType', 'Unregistered')">Unregistered</button>
               </div>
-              @if (v.buyer.registrationType === 'Unregistered') { <span class="hint">Further tax of {{ biz()?.furtherTaxRate }}% is added on taxable lines.</span> }
+              @if (v.buyer.registrationType === 'Unregistered') { <span class="hint">Further tax of {{ furtherRate() }}% is added on taxable lines.</span> }
             </div>
             <div class="field">
               <label for="bprov">Province</label>
@@ -327,7 +327,7 @@ export class InvoiceEditorComponent {
           const live = this.ref.rates(l.saleType);
           if (live.includes(l.rate) || l.rate !== saleTypeDef(l.saleType)?.offlineRates[0]) return l;
           changed = true;
-          return computeLine({ ...l, rate: live[0] ?? l.rate }, v.buyer, this.biz()?.furtherTaxRate ?? 0);
+          return computeLine({ ...l, rate: live[0] ?? l.rate }, v.buyer, this.ctx(v));
         });
         return changed ? { ...v, items } : v;
       }));
@@ -375,10 +375,21 @@ export class InvoiceEditorComponent {
 
   /* ---------- mutations ---------- */
   private recompute(v: Invoice): Invoice {
-    const rate = this.biz()?.furtherTaxRate ?? 0;
-    return { ...v, items: v.items.map(l => computeLine(l, v.buyer, rate)) };
+    return { ...v, items: v.items.map(l => computeLine(l, v.buyer, this.ctx(v))) };
   }
-  protected set<K extends keyof Invoice>(k: K, val: Invoice[K]) { this.inv.update(v => v && ({ ...v, [k]: val })); }
+  /**
+   * What line tax depends on: the further-tax rate on the invoice date and
+   * PRAL's numeric rates (loaded per date by ReferenceService).
+   */
+  private ctx(v: Invoice) {
+    const b = this.biz();
+    return b ? taxContext(b, v.invoiceDate, this.ref.checks().rateValue) : 0;
+  }
+  protected furtherRate = computed(() => { const b = this.biz(); const v = this.inv(); return b && v ? furtherTaxRateOn(b, v.invoiceDate) : 0; });
+  /** The date decides the further-tax rate and which PRAL rates apply, so lines are recomputed when it changes. */
+  protected set<K extends keyof Invoice>(k: K, val: Invoice[K]) {
+    this.inv.update(v => v && (k === 'invoiceDate' ? this.recompute({ ...v, [k]: val }) : { ...v, [k]: val }));
+  }
   protected setBuyer(k: keyof Invoice['buyer'], val: string) {
     this.inv.update(v => {
       if (!v) return v;
@@ -398,7 +409,7 @@ export class InvoiceEditorComponent {
         if (allowed?.length === 1) line.uoM = allowed[0]; else if (sample) line.uoM = sample.uom;
         if (/^\d{4}\.\d{4}$/.test(code)) void this.applyHsUoms(i, code);
       }
-      line = computeLine(line, v.buyer, this.biz()?.furtherTaxRate ?? 0);
+      line = computeLine(line, v.buyer, this.ctx(v));
       items[i] = line;
       return { ...v, items };
     });
@@ -418,7 +429,7 @@ export class InvoiceEditorComponent {
       const l = v?.items[i];
       if (!v || !l || l.hsCode !== code || allowed.includes(l.uoM)) return v;
       const items = v.items.slice();
-      items[i] = computeLine({ ...l, uoM: allowed[0] }, v.buyer, this.biz()?.furtherTaxRate ?? 0);
+      items[i] = computeLine({ ...l, uoM: allowed[0] }, v.buyer, this.ctx(v));
       return { ...v, items };
     });
   }
@@ -426,7 +437,7 @@ export class InvoiceEditorComponent {
     this.inv.update(v => {
       if (!v) return v;
       const items = v.items.slice();
-      items[i] = computeLine({ ...items[i], saleType, rate: this.ref.defaultRate(saleType, v.invoiceDate) }, v.buyer, this.biz()?.furtherTaxRate ?? 0);
+      items[i] = computeLine({ ...items[i], saleType, rate: this.ref.defaultRate(saleType, v.invoiceDate) }, v.buyer, this.ctx(v));
       return { ...v, items };
     });
   }
@@ -446,7 +457,7 @@ export class InvoiceEditorComponent {
     this.inv.update(cur => {
       if (!cur) return cur;
       const items = cur.items.slice();
-      items[i] = computeLine({ ...items[i], hsCode: p.hsCode, uoM: p.uoM, saleType: p.saleType, rate: p.rate, unitPrice: p.unitPrice }, cur.buyer, this.biz()?.furtherTaxRate ?? 0);
+      items[i] = computeLine({ ...items[i], hsCode: p.hsCode, uoM: p.uoM, saleType: p.saleType, rate: p.rate, unitPrice: p.unitPrice }, cur.buyer, this.ctx(cur));
       return { ...cur, items };
     });
   }

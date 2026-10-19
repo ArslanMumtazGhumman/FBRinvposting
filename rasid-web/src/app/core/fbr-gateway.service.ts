@@ -4,7 +4,7 @@ import { firstValueFrom } from 'rxjs';
 import { environment } from '../../environments/environment';
 import { FbrEnvironment, FbrInvoicePayload, FbrItemStatus, FbrResponse } from './models';
 import { HS_UOM_RULES, saleTypeDef } from './fbr-reference';
-import { rateValue, round2 } from './tax';
+import { lineSalesTax } from './tax';
 import { sleep } from './util';
 
 /** Transient error: network, timeout or HTTP 5xx. Safe to retry. */
@@ -104,9 +104,7 @@ export class FbrGatewayService {
       const fixed = HS_UOM_RULES[it.hsCode];
       if (fixed && it.uoM !== fixed) return fail('0096', 'For selected HSCode only KWH UOM is allowed.');
       if (it.hsCode.startsWith('2716') && def.name !== 'Electricity Supply to Retailers') return fail('0052', 'Please provide valid HS Code against invoice');
-      const r = rateValue(it.rate);
-      const b = def.usesRetailPrice ? it.fixedNotifiedValueOrRetailPrice : it.valueSalesExcludingST;
-      const expected = def.exempt ? 0 : round2(b * r / 100);
+      const expected = lineSalesTax(it, def).salesTax;
       if (Math.abs(expected - it.salesTaxApplicable) > 1) {
         return def.usesRetailPrice ? fail('0102', 'Calculated tax not matched in 3rd schedule') : fail('0104', 'The calculated percentage sales tax does not match.');
       }

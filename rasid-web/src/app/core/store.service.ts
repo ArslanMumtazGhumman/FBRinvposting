@@ -1,7 +1,8 @@
 import { Injectable, effect } from '@angular/core';
 import { Business, Customer, ImportMapping, Invoice, Product } from './models';
 import { BulkSaveResult, Store } from './store';
-import { computeLine } from './tax';
+import { FURTHER_TAX_DEFAULT } from './fbr-reference';
+import { computeLine, taxContext } from './tax';
 import { nowIso, uid } from './util';
 
 const KEY = 'rasid:v1:';
@@ -96,7 +97,7 @@ export class StoreService extends Store {
       id: bizId, name: 'Al-Noor Traders (Pvt) Ltd', ntnCnic: '1234567', province: 'Punjab',
       address: '14-B Gulberg III, Lahore', activity: 'Distributor', sector: 'FMCG', environment: 'sandbox',
       hasSandboxToken: true, hasProductionToken: false, tokenHintSandbox: '••••9f2a',
-      defaultSaleType: 'Goods at standard rate (default)', furtherTaxRate: 4,
+      defaultSaleType: 'Goods at standard rate (default)', furtherTaxRate: FURTHER_TAX_DEFAULT,
       invoicePrefix: 'ANT-', nextInvoiceNo: 1043,
     };
     const second: Business = {
@@ -133,7 +134,7 @@ export class StoreService extends Store {
         totalValues: 0, valueSalesExcludingST: 0, fixedNotifiedValueOrRetailPrice: 0, salesTaxApplicable: 0,
         salesTaxWithheldAtSource: 0, extraTax: 0, furtherTax: 0, sroScheduleNo: '', fedPayable: 0, discount: 0,
         saleType: p.saleType, sroItemSerialNo: '',
-      }, buyer, biz.furtherTaxRate);
+      }, buyer, taxContext(biz, date));
       const status = n < 3 ? (['draft', 'failed', 'validated'] as const)[n] : statuses[n % statuses.length];
       const posted = status === 'posted';
       const irn = posted ? `${biz.ntnCnic}DI${d.getTime()}` : undefined;

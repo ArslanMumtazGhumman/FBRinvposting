@@ -4,12 +4,12 @@ import { FormsModule } from '@angular/forms';
 import { firstValueFrom } from 'rxjs';
 import { environment } from '../../../environments/environment';
 import { errorMessage } from '../../core/api';
-import { ACTIVITIES, PROVINCES, SALE_TYPES, SECTORS } from '../../core/fbr-reference';
+import { ACTIVITIES, FURTHER_TAX_DEFAULT, PROVINCES, SALE_TYPES, SECTORS } from '../../core/fbr-reference';
 import { Business, FbrEnvironment } from '../../core/models';
 import { Store } from '../../core/store';
 import { cleanNtn } from '../../core/tax';
 import { UiService } from '../../core/ui.service';
-import { sleep, uid } from '../../core/util';
+import { sleep, todayIso, uid } from '../../core/util';
 import { IconComponent } from '../../shared/icon.component';
 
 type Tab = 'business' | 'fbr' | 'defaults' | 'team' | 'add';
@@ -93,9 +93,22 @@ type Tab = 'business' | 'fbr' | 'defaults' | 'team' | 'add';
               <div class="panel-head"><h2>Invoice defaults</h2></div>
               <div class="panel-body grid">
                 <div class="field span2"><label for="dst">Default sale type</label><select id="dst" class="select" [(ngModel)]="d.defaultSaleType">@for (s of saleTypes; track s.name) { <option [value]="s.name">{{ s.name }}</option> }</select></div>
-                <div class="field"><label for="dft">Further tax for unregistered buyers (%)</label><input id="dft" class="input" type="number" step="0.5" min="0" [(ngModel)]="d.furtherTaxRate" /><span class="hint">Confirm the current rate with your tax adviser.</span></div>
                 <div class="field"><label for="dpre">Invoice number prefix</label><input id="dpre" class="input" [(ngModel)]="d.invoicePrefix" /></div>
                 <div class="field"><label for="dnext">Next invoice number</label><input id="dnext" class="input" type="number" min="1" [(ngModel)]="d.nextInvoiceNo" /></div>
+              </div>
+              <div class="panel-body ft">
+                <h3>Further tax for unregistered buyers</h3>
+                <p class="hint">The latest change on or before an invoice's date applies; earlier invoices use the base rate. Confirm rates with your tax adviser.</p>
+                <div class="ft-row"><label for="dft">Base rate (%)</label><input id="dft" class="input" type="number" step="0.5" min="0" max="100" [(ngModel)]="d.furtherTaxRate" /><span></span><span></span></div>
+                @for (c of d.furtherTaxRates ?? []; track $index; let k = $index) {
+                  <div class="ft-row">
+                    <label [for]="'ftf' + k">From</label>
+                    <input [id]="'ftf' + k" class="input" type="date" [(ngModel)]="c.from" />
+                    <input class="input" type="number" step="0.5" min="0" max="100" [(ngModel)]="c.rate" [attr.aria-label]="'Rate from ' + (c.from || 'date') + ' (%)'" />
+                    <button class="btn btn-ghost btn-sm" (click)="removeFurtherTax(d, k)">Remove</button>
+                  </div>
+                }
+                <button class="btn btn-sm" (click)="addFurtherTax(d)"><app-icon name="plus" /> Add a rate change</button>
               </div>
               <div class="panel-body end"><button class="btn btn-primary" (click)="saveBiz(d)">Save defaults</button></div>
             </section>
@@ -157,6 +170,10 @@ type Tab = 'business' | 'fbr' | 'defaults' | 'team' | 'add';
     </div>
   </div>`,
   styles: [`
+    .ft { border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+    .ft h3 { margin: 0; }
+    .ft-row { display: grid; grid-template-columns: 110px 170px 110px auto; gap: 8px; align-items: center; }
+    @media (max-width: 600px) { .ft-row { grid-template-columns: 1fr 1fr; } }
     .layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 20px; align-items: start; }
     .tabs { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 16px; }
     .tabs button { display: flex; align-items: center; gap: 10px; border: 0; background: transparent; text-align: left; padding: 9px 12px; border-radius: var(--radius-s);
@@ -197,16 +214,32 @@ export class SettingsComponent {
   protected newBiz = this.blankBiz();
 
   constructor() {
-    effect(() => { const b = this.store.business(); this.draft.set(b ? { ...b } : null); });
+    effect(() => {
+      const b = this.store.business();
+      this.draft.set(b ? { ...b, furtherTaxRates: (b.furtherTaxRates ?? []).map(r => ({ ...r })) } : null);
+    });
   }
 
   protected layouts = () => this.store.mappings().filter(m => m.businessId === this.store.business()?.id);
   protected mappedCount = (m: Record<string, string>) => Object.values(m).filter(Boolean).length;
   deleteLayout(id: string) { this.store.deleteMapping(id).catch(e => this.ui.toast(errorMessage(e, 'Could not forget the layout'), 'error')); }
 
+  addFurtherTax(d: Business) {
+    d.furtherTaxRates = [...(d.furtherTaxRates ?? []), { from: todayIso(), rate: Number(d.furtherTaxRate) || 0 }];
+    this.draft.set({ ...d });
+  }
+  removeFurtherTax(d: Business, k: number) {
+    d.furtherTaxRates = (d.furtherTaxRates ?? []).filter((_, i) => i !== k);
+    this.draft.set({ ...d });
+  }
+
   async saveBiz(d: Business) {
+    const changes = (d.furtherTaxRates ?? []).map(r => ({ from: r.from, rate: Number(r.rate) || 0 }));
+    if (changes.some(r => !/^\d{4}-\d{2}-\d{2}$/.test(r.from))) { this.ui.toast('Give each further-tax change a date.', 'error'); return; }
+    if (new Set(changes.map(r => r.from)).size !== changes.length) { this.ui.toast('Only one further-tax change per date.', 'error'); return; }
     try {
-      await this.store.updateBusiness({ ...d, ntnCnic: cleanNtn(d.ntnCnic), furtherTaxRate: Number(d.furtherTaxRate) || 0, nextInvoiceNo: Math.max(1, Math.floor(d.nextInvoiceNo)) });
+      await this.store.updateBusiness({ ...d, ntnCnic: cleanNtn(d.ntnCnic), furtherTaxRate: Number(d.furtherTaxRate) || 0,
+        furtherTaxRates: changes.sort((a, b) => a.from.localeCompare(b.from)), nextInvoiceNo: Math.max(1, Math.floor(d.nextInvoiceNo)) });
       this.ui.toast('Saved');
     } catch (e) { this.ui.toast(errorMessage(e, 'Could not save'), 'error'); }
   }
@@ -258,7 +291,7 @@ export class SettingsComponent {
 
   private blankBiz(): Business {
     return { id: '', name: '', ntnCnic: '', province: 'Punjab', address: '', activity: 'Wholesaler', sector: 'All Other Sectors', environment: 'sandbox',
-      hasSandboxToken: false, hasProductionToken: false, defaultSaleType: 'Goods at standard rate (default)', furtherTaxRate: 4, invoicePrefix: 'INV-', nextInvoiceNo: 1 };
+      hasSandboxToken: false, hasProductionToken: false, defaultSaleType: 'Goods at standard rate (default)', furtherTaxRate: FURTHER_TAX_DEFAULT, invoicePrefix: 'INV-', nextInvoiceNo: 1 };
   }
   async addBiz() {
     try {

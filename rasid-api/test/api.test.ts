@@ -289,6 +289,21 @@ describe('businesses', () => {
     await a.put(`/businesses/${A.businessId}`, profile({ name: 'Alpha', invoicePrefix: 'ANT-', nextInvoiceNo: 500 }));
   });
 
+  test('further tax: dated changes are stored sorted, one per date, and kept on create', async () => {
+    const changes = [{ rate: 5, from: '2027-07-01' }, { rate: 4, from: '2026-07-01' }];
+    const r = await a.put(`/businesses/${A.businessId}`, profile({ name: 'Alpha', invoicePrefix: 'ANT-', nextInvoiceNo: 500, furtherTaxRates: changes }));
+    assert.equal(r.status, 200, r.text);
+    assert.deepEqual(r.body.furtherTaxRates, [{ rate: 4, from: '2026-07-01' }, { rate: 5, from: '2027-07-01' }]);
+    assert.deepEqual((await a.get('/businesses')).body.find((x: { id: string }) => x.id === A.businessId).furtherTaxRates, r.body.furtherTaxRates);
+    assert.equal((await a.put(`/businesses/${A.businessId}`, profile({ furtherTaxRates: [{ rate: 4, from: '2026-07-01' }, { rate: 5, from: '2026-07-01' }] }))).status, 400);
+    assert.equal((await a.put(`/businesses/${A.businessId}`, profile({ furtherTaxRates: [{ rate: 101, from: '2026-07-01' }] }))).status, 400);
+    assert.equal((await a.put(`/businesses/${A.businessId}`, profile({ furtherTaxRates: [{ rate: 4, from: '2026-02-30' }] }))).status, 400);
+    const created = await a.post('/businesses', profile({ id: 'b_alpha_third', furtherTaxRates: [{ rate: 3, from: '2026-01-01' }] }));
+    assert.deepEqual(created.body.furtherTaxRates, [{ rate: 3, from: '2026-01-01' }]);
+    assert.deepEqual((await a.post('/businesses', profile({ id: 'b_alpha_fourth' }))).body.furtherTaxRates, [], 'optional');
+    await a.put(`/businesses/${A.businessId}`, profile({ name: 'Alpha', invoicePrefix: 'ANT-', nextInvoiceNo: 500 }));
+  });
+
   test('numbers the browser assigned move the counter past them', async () => {
     assert.equal((await a.post(inv(A), invoiceBody({ localRef: 'ANT-00510' }))).status, 201);
     assert.equal((await a.post(inv(A), invoiceBody({ localRef: 'OTHER-99999' }))).status, 201);

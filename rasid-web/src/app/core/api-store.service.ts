@@ -21,7 +21,8 @@ const invoiceBody = (i: Invoice) => ({
 });
 const businessBody = (b: Business) => ({
   id: b.id || undefined, name: b.name, ntnCnic: b.ntnCnic, province: b.province, address: b.address, activity: b.activity, sector: b.sector,
-  environment: b.environment, defaultSaleType: b.defaultSaleType, furtherTaxRate: b.furtherTaxRate, invoicePrefix: b.invoicePrefix, nextInvoiceNo: b.nextInvoiceNo,
+  environment: b.environment, defaultSaleType: b.defaultSaleType, furtherTaxRate: b.furtherTaxRate,
+  furtherTaxRates: b.furtherTaxRates ?? [], invoicePrefix: b.invoicePrefix, nextInvoiceNo: b.nextInvoiceNo,
 });
 const customerBody = ({ businessId: _b, ...c }: Customer) => c;
 const productBody = ({ businessId: _b, ...p }: Product) => p;

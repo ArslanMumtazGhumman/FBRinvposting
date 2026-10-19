@@ -10,7 +10,7 @@ import { FieldIssue, Invoice, LineItem } from '../../core/models';
 import { PostingService, issuesFromResponse } from '../../core/posting.service';
 import { ReferenceService } from '../../core/reference.service';
 import { Store } from '../../core/store';
-import { cleanNtn, computeLine, normaliseRate, toPayload, validateInvoice } from '../../core/tax';
+import { cleanNtn, computeLine, normaliseRate, taxContext, toPayload, validateInvoice } from '../../core/tax';
 import { UiService } from '../../core/ui.service';
 import { formatPkr, nowIso, uid } from '../../core/util';
 import { IconComponent } from '../../shared/icon.component';
@@ -462,21 +462,21 @@ export class BulkImportComponent implements OnDestroy {
     this.mutate(inv, v => ({ ...v, [k]: val.trim() }));
     void this.ref.loadRates(val.trim());
   }
+  /** Further tax on the invoice's date, PRAL's numeric rates when loaded. */
+  private ctx(v: Invoice) { return taxContext(this.store.business()!, v.invoiceDate, this.ref.checks().rateValue); }
   editBuyer(inv: number, k: 'name' | 'ntnCnic', val: string) {
-    const rate = this.store.business()!.furtherTaxRate;
     this.mutate(inv, v => {
       const buyer = { ...v.buyer, [k]: k === 'ntnCnic' ? cleanNtn(val) : val.trim() };
       if (k === 'ntnCnic') buyer.registrationType = buyer.ntnCnic.length === 7 || buyer.ntnCnic.length === 9 ? 'Registered' : 'Unregistered';
-      return { ...v, buyer, items: v.items.map(l => computeLine(l, buyer, rate)) };
+      return { ...v, buyer, items: v.items.map(l => computeLine(l, buyer, this.ctx(v))) };
     });
   }
   editLine(r: GridRow, k: keyof LineItem, val: unknown) {
-    const rate = this.store.business()!.furtherTaxRate;
     this.mutate(r.inv, v => {
       const items = v.items.slice();
       let l = { ...items[r.line], [k]: k === 'rate' ? normaliseRate(val) : val } as LineItem;
       if (k === 'valueSalesExcludingST') l.unitPrice = l.quantity ? (val as number) / l.quantity : 0;
-      if (k !== 'salesTaxApplicable') l = computeLine(l, v.buyer, rate);
+      if (k !== 'salesTaxApplicable') l = computeLine(l, v.buyer, this.ctx(v));
       else l.totalValues = Math.round((l.valueSalesExcludingST + l.salesTaxApplicable + l.furtherTax + l.extraTax + l.fedPayable - l.discount) * 100) / 100;
       items[r.line] = l;
       return { ...v, items };
@@ -484,8 +484,7 @@ export class BulkImportComponent implements OnDestroy {
     if (k === 'hsCode') void this.ref.checkHs([String(val)]);
   }
   recalcAll() {
-    const rate = this.store.business()!.furtherTaxRate;
-    this.invoices.update(list => list.map(v => ({ ...v, items: v.items.map(l => computeLine(l, v.buyer, rate)) })));
+    this.invoices.update(list => list.map(v => ({ ...v, items: v.items.map(l => computeLine(l, v.buyer, this.ctx(v))) })));
     this.fbrIssues.set(new Map());
     this.ui.toast('Sales tax and totals recalculated from rates');
   }

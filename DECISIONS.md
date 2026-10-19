@@ -403,3 +403,30 @@ confirm every row that still has `needs_review`. These rows are uncertain on the
   codes and the rates for each distinct invoice date. The errors appear on the same cells as before. "Validate with
   FBR" waits for these checks, so FBR only sees invoices that pass them.
 
+### Step 4: tax rules
+- **Rate parsing lives in `core/rate.ts`** (`parseRate`), the only place that reads rate text. It handles percentages
+  (`18%`, `1.43%`, `18 %`, a bare `18`), `Exempt`, zero-rated, and a fixed amount per unit, alone or after a percentage
+  (`18% along with rupees 60 per kilogram`, `Rs.60 per kg`, `Rs 1000/MT`, `PKR 2.5/kWh`). Text it can't read gives
+  `ok: false` and 0%. Local validation then flags the tax mismatch (0104), and FBR settles it.
+- **The fixed part is amount × quantity in the amount's unit.** Mass converts (Gram, KG, Ton/MT). Units that can't be
+  compared (per kilogram on a line in litres) add nothing. Rasid doesn't guess a conversion; the user or FBR's
+  validate settles it. A fixed-only rate counts as taxable, so further tax applies to unregistered buyers.
+- **computeLine takes a `TaxContext`:** the further-tax rate on the invoice date, and `ratePercent` (PRAL's
+  `ratE_VALUE` for the line's rate, from `ReferenceService.checks().rateValue`). When PRAL gave a number it's used for the
+  percentage, and the text only for the fixed part. A plain number is still accepted as the further-tax rate.
+  validateInvoice computes the expected tax with the same `lineSalesTax`, as does the offline FBR simulator.
+- **Bulk import** builds lines from the rate text: PRAL's rates for a sheet's dates load after it's mapped. Tax the
+  sheet provides is kept as before. Recalculate and edits use PRAL's numbers once they've loaded.
+- **Further tax is per business with effective dates.** `businesses.further_tax_rates` is a jsonb list
+  `[{ rate, from }]`: at most 50, one per date, stored sorted. The API role may update it, and `create_business()`
+  takes it (migration 0007). The rate for an invoice is the latest change on or before its date, else the base
+  `further_tax_rate` (`furtherTaxRateOn`). The editor recomputes lines when the invoice date changes. Settings →
+  Defaults lists the changes. A list on the business rather than a table: it's small, always read with the business,
+  and RLS on `businesses` already covers it.
+
+#### To confirm before release (product owner)
+- **The 4% further-tax default is not confirmed.** It comes from the first version. It's the default for new businesses
+  in rasid-web (`FURTHER_TAX_DEFAULT` in `fbr-reference.ts`, also used by the offline demo) and in the database
+  (`businesses.further_tax_rate DEFAULT 4`). Confirm the rate in force, and whether it differs by buyer or sector,
+  and change both places. Businesses that already exist keep the rate they store.
+

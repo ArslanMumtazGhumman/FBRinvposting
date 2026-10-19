@@ -1,5 +1,5 @@
 import { Business, Buyer, Invoice, LineItem } from './models';
-import { cleanNtn, computeLine, emptyLine, invoiceTotals, normaliseRate, rateValue, round2, toPayload, validateInvoice } from './tax';
+import { cleanNtn, computeLine, emptyLine, furtherTaxRateOn, invoiceTotals, normaliseRate, rateValue, round2, taxContext, toPayload, validateInvoice } from './tax';
 
 const SELLER: Business = {
   id: 'b1', name: 'Al-Noor Traders', ntnCnic: '123-4567', province: 'Punjab', address: 'Lahore', activity: 'Distributor', sector: 'FMCG',
@@ -68,6 +68,34 @@ describe('computeLine', () => {
   it('rounds to paisa', () => {
     expect(computeLine(line({ quantity: 3, unitPrice: 33.333 }), REGISTERED, 4)).toMatchObject({ valueSalesExcludingST: 100, salesTaxApplicable: 18 });
     expect(computeLine(line({ quantity: 7, unitPrice: 12.345 }), REGISTERED, 4).salesTaxApplicable).toBe(15.56);
+  });
+
+  it('percentage plus a fixed amount per unit: "18% along with rupees 60 per kilogram"', () => {
+    // 10 KG at 155: 18% of 1550 = 279, plus 60 × 10 = 600.
+    const l = computeLine(line({ rate: '18% along with rupees 60 per kilogram' }), REGISTERED, 4);
+    expect(l).toMatchObject({ salesTaxApplicable: 879, totalValues: 2429 });
+    expect(computeLine(line({ rate: '18% along with rupees 60 per kilogram', uoM: 'Ton', quantity: 1, unitPrice: 155 }), REGISTERED, 4).salesTaxApplicable)
+      .toBe(round2(155 * 0.18 + 60_000));
+    // Units that can't be compared: only the percentage is computed; FBR's validate settles the rest.
+    expect(computeLine(line({ rate: '18% along with rupees 60 per kilogram', uoM: 'Liter' }), REGISTERED, 4).salesTaxApplicable).toBe(279);
+  });
+
+  it('a fixed-only rate is taxable, so unregistered buyers pay further tax', () => {
+    expect(computeLine(line({ rate: 'Rs.60 per kg' }), UNREGISTERED, 4)).toMatchObject({ salesTaxApplicable: 600, furtherTax: 62 });
+  });
+
+  it('uses PRAL’s numeric value for the percentage when the API gives one, the text otherwise', () => {
+    const ctx = { furtherTaxRate: 4, ratePercent: (_st: string, r: string) => (r === '18% (per notification)' ? 17 : undefined) };
+    expect(computeLine(line({ rate: '18% (per notification)' }), REGISTERED, ctx).salesTaxApplicable).toBe(263.5);
+    expect(computeLine(line({ rate: '18%' }), REGISTERED, ctx).salesTaxApplicable).toBe(279);
+  });
+
+  it('further tax follows the rate in force on the invoice date', () => {
+    const biz = { furtherTaxRate: 4, furtherTaxRates: [{ rate: 5, from: '2027-01-01' }, { rate: 3, from: '2026-07-01' }] };
+    expect([furtherTaxRateOn(biz, '2026-06-30'), furtherTaxRateOn(biz, '2026-07-01'), furtherTaxRateOn(biz, '2026-12-31'), furtherTaxRateOn(biz, '2027-03-01')])
+      .toEqual([4, 3, 3, 5]);
+    expect(computeLine(line(), UNREGISTERED, taxContext(biz, '2027-03-01')).furtherTax).toBe(77.5);
+    expect(computeLine(line(), UNREGISTERED, taxContext({ furtherTaxRate: 4 }, '2027-03-01')).furtherTax).toBe(62);
   });
 
   it('invoiceTotals sums every line', () => {

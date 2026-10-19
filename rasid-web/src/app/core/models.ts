@@ -136,7 +136,10 @@ export interface Business {
   tokenHintSandbox?: string;
   tokenHintProduction?: string;
   defaultSaleType: string;
-  furtherTaxRate: number;     // percent, configurable
+  /** Further tax (%) for unregistered buyers, before the first dated change below. */
+  furtherTaxRate: number;
+  /** Dated changes to the further-tax rate; the latest one on or before an invoice's date applies (furtherTaxRateOn). */
+  furtherTaxRates?: FurtherTaxRate[];
   invoicePrefix: string;
   nextInvoiceNo: number;
 }
@@ -175,3 +178,6 @@ export interface ImportMapping {
   map: Record<string, string>; // targetField -> source header
   createdAt: string;
 }
+
+/** A further-tax rate (%) that applies to invoices dated on or after `from` (YYYY-MM-DD). */
+export interface FurtherTaxRate { rate: number; from: string }

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FbrEnv, Id, money, NtnCnic, RegistrationType, SellerNtnCnic, text } from './common.js';
+import { FbrEnv, Id, IsoDate, money, NtnCnic, RegistrationType, SellerNtnCnic, text } from './common.js';
 
 export const CustomerInput = z.object({
   id: Id.optional(),
@@ -47,6 +47,10 @@ export const BusinessInput = z.object({
   environment: FbrEnv,
   defaultSaleType: text(200).min(1),
   furtherTaxRate: z.number().finite().min(0).max(100),
+  /** Dated further-tax changes; one per date, stored sorted. */
+  furtherTaxRates: z.array(z.object({ rate: z.number().finite().min(0).max(100), from: IsoDate })).max(50).default([])
+    .refine(list => new Set(list.map(r => r.from)).size === list.length, 'Only one further-tax change per date.')
+    .transform(list => [...list].sort((x, y) => x.from.localeCompare(y.from))),
   invoicePrefix: z.string().max(20).regex(/^[A-Za-z0-9/_-]*$/, 'Use letters, digits, - / or _.'),
   nextInvoiceNo: z.number().int().min(1).max(99_999_999),
 });

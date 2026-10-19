@@ -7,7 +7,7 @@ import { ACTIVITIES, SCENARIOS, SECTORS, applicableScenarios, saleTypeDef } from
 import { Invoice, LineItem } from '../../core/models';
 import { PostingService, issuesFromResponse } from '../../core/posting.service';
 import { Store } from '../../core/store';
-import { computeLine, emptyLine, toPayload } from '../../core/tax';
+import { computeLine, emptyLine, taxContext, toPayload } from '../../core/tax';
 import { UiService } from '../../core/ui.service';
 import { nowIso, todayIso, uid } from '../../core/util';
 import { IconComponent } from '../../shared/icon.component';
@@ -127,7 +127,7 @@ export class ScenariosComponent {
     const [hs, uom] = HS_FOR[sc.saleType] ?? ['1701.9910', 'KG'];
     let line: LineItem = { ...emptyLine(sc.saleType), hsCode: hs, uoM: uom, productDescription: `${sc.description} (test)`, quantity: 10, unitPrice: 100 };
     if (def.usesRetailPrice) line.fixedNotifiedValueOrRetailPrice = 1300;
-    line = computeLine(line, buyer, b.furtherTaxRate);
+    line = computeLine(line, buyer, taxContext(b, todayIso()));
     const at = nowIso();
     return { id: uid('i_'), businessId: b.id, localRef: `TEST-${id}-${Date.now()}`, invoiceType: 'Sale Invoice', invoiceDate: todayIso(), buyer, items: [line],
       invoiceRefNo: '', scenarioId: id, environment: 'sandbox', status: 'draft', issues: [], attempts: 0, createdAt: at, updatedAt: at, history: [] };

@@ -50,6 +50,13 @@
       "when": 1792393236580,
       "tag": "0006_sale_types",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1792396473906,
+      "tag": "0007_further_tax_rates",
+      "breakpoints": true
     }
   ]
 }
